@@ -5,10 +5,9 @@ import { StatusCard } from './StatusCard';
 import { QuickActions } from './QuickActions';
 import { SystemInfo } from './SystemInfo';
 import { Setup } from '../Setup';
-import { api, ServiceStatus, isTauri } from '../../lib/tauri';
+import { api, EnvironmentStatus, ServiceStatus, isTauri } from '../../lib/tauri';
 import { Terminal, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import clsx from 'clsx';
-import { EnvironmentStatus } from '../../App';
 
 interface DashboardProps {
   envStatus: EnvironmentStatus | null;
@@ -141,7 +140,7 @@ export function Dashboard({ envStatus, onSetupComplete }: DashboardProps) {
   };
 
   // 检查环境是否就绪
-  const needsSetup = envStatus && !envStatus.ready;
+  const needsSetup = envStatus && (!envStatus.ready || !envStatus.ai_configured);
 
   return (
     <div className="h-full overflow-y-auto scroll-container pr-2">

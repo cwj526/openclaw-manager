@@ -1,6 +1,7 @@
 # 🦞 OpenClaw Manager
 
 高性能跨平台 AI 助手管理工具，基于 **Tauri 2.0 + React + TypeScript + Rust** 构建。
+当前版本以 **Tuzi API 快速接入** 为核心，同时保留其他 AI Provider 的桌面端配置能力。
 
 ![Platform](https://img.shields.io/badge/platform-macOS%20|%20Windows%20|%20Linux-blue)
 ![Tauri](https://img.shields.io/badge/Tauri-2.0-orange)
@@ -153,7 +154,7 @@ sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libxdo-devel
 
 ```bash
 # 克隆项目
-git clone https://github.com/miaoxworld/openclaw-manager.git
+git clone https://github.com/cwj526/openclaw-manager.git
 cd openclaw-manager
 
 # 安装依赖
@@ -279,8 +280,8 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 ## 🔗 相关链接
 
-- [OpenClaw Manager](https://github.com/miaoxworld/openclaw-manager) - 图形界面版本（本项目）
-- [OpenClawInstaller](https://github.com/miaoxworld/OpenClawInstaller) - 命令行版本
+- [OpenClaw Manager](https://github.com/cwj526/openclaw-manager) - 图形界面版本（本项目）
+- [OpenClawInstaller](https://github.com/cwj526/OpenClawInstaller) - 命令行版本
 - [Tauri 官方文档](https://tauri.app/)
 - [React 官方文档](https://react.dev/)
 

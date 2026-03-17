@@ -1,7 +1,7 @@
 use crate::models::{
     AIConfigOverview, ChannelConfig, ConfiguredModel, ConfiguredProvider,
-    ModelConfig, ModelCostConfig, OfficialProvider, OpenClawConfig,
-    ProviderConfig, SuggestedModel,
+    ModelConfig, OfficialProvider, SuggestedModel, TuziConfigOverview, TuziGroup,
+    TuziGroupConfig, TuziModelTemplate,
 };
 use crate::utils::{file, platform, shell};
 use log::{debug, error, info, warn};
@@ -9,6 +9,306 @@ use serde_json::{json, Value};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tauri::command;
+
+const TUZI_CLAUDE_PROVIDER_ID: &str = "tuzi-claude-code";
+const TUZI_CODEX_PROVIDER_ID: &str = "tuzi-codex";
+
+fn mask_api_key(value: Option<String>) -> Option<String> {
+    value.map(|key| {
+        if key.len() > 8 {
+            format!("{}...{}", &key[..4], &key[key.len() - 4..])
+        } else {
+            "****".to_string()
+        }
+    })
+}
+
+fn tuzi_group_settings(group: &TuziGroup) -> (&'static str, &'static str, &'static str) {
+    match group {
+        TuziGroup::Codex => (
+            TUZI_CODEX_PROVIDER_ID,
+            "https://api.tu-zi.com/v1",
+            "openai-responses",
+        ),
+        TuziGroup::ClaudeCode => (
+            TUZI_CLAUDE_PROVIDER_ID,
+            "https://api.tu-zi.com",
+            "anthropic-messages",
+        ),
+    }
+}
+
+fn tuzi_group_keys(group: &TuziGroup) -> (&'static str, &'static str, &'static str) {
+    match group {
+        TuziGroup::Codex => (
+            "TUZI_CODEX_API_KEY",
+            "TUZI_CODEX_MODEL",
+            "TUZI_CODEX_MODELS",
+        ),
+        TuziGroup::ClaudeCode => (
+            "TUZI_CLAUDE_CODE_API_KEY",
+            "TUZI_CLAUDE_CODE_MODEL",
+            "TUZI_CLAUDE_CODE_MODELS",
+        ),
+    }
+}
+
+fn split_csv_models(value: Option<String>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_string())
+        .collect()
+}
+
+fn ensure_config_file_parent_dirs() -> Result<(), String> {
+    let config_dir = platform::get_config_dir();
+    std::fs::create_dir_all(format!("{}/agents/main/sessions", config_dir))
+        .map_err(|e| format!("创建 sessions 目录失败: {}", e))?;
+    std::fs::create_dir_all(format!("{}/agents/main/agent", config_dir))
+        .map_err(|e| format!("创建 agent 目录失败: {}", e))?;
+    std::fs::create_dir_all(format!("{}/credentials", config_dir))
+        .map_err(|e| format!("创建 credentials 目录失败: {}", e))?;
+    Ok(())
+}
+
+fn rewrite_env_file(env_pairs: &[(String, String)]) -> Result<(), String> {
+    let env_path = platform::get_env_file_path();
+    let mut lines = vec![
+        "# OpenClaw 环境变量配置".to_string(),
+        format!(
+            "# 由 OpenClaw Manager 自动生成: {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        ),
+    ];
+
+    for (key, value) in env_pairs {
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        lines.push(format!("export {}=\"{}\"", key, escaped));
+    }
+
+    file::write_file(&env_path, &lines.join("\n"))
+        .map_err(|e| format!("写入 env 文件失败: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::metadata(&env_path)
+            .map_err(|e| format!("读取 env 文件权限失败: {}", e))?;
+        let mut perms = metadata.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&env_path, perms)
+            .map_err(|e| format!("设置 env 文件权限失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
+fn build_tuzi_group_config(group: TuziGroup) -> TuziGroupConfig {
+    let env_path = platform::get_env_file_path();
+    let (provider_id, base_url, api_type) = tuzi_group_settings(&group);
+    let (api_key_key, model_key, models_key) = tuzi_group_keys(&group);
+    let api_key = file::read_env_value(&env_path, api_key_key);
+    let primary_model = file::read_env_value(&env_path, model_key);
+    let mut models = split_csv_models(file::read_env_value(&env_path, models_key));
+    if models.is_empty() {
+        if let Some(model) = &primary_model {
+            models.push(model.clone());
+        }
+    }
+
+    TuziGroupConfig {
+        group,
+        configured: api_key.is_some() && primary_model.is_some(),
+        provider_id: provider_id.to_string(),
+        base_url: base_url.to_string(),
+        api_type: api_type.to_string(),
+        api_key_masked: mask_api_key(api_key),
+        primary_model,
+        models,
+    }
+}
+
+fn sync_tuzi_provider_in_config(
+    config: &mut Value,
+    group: &TuziGroup,
+    api_key: &str,
+    models: &[String],
+    activate_group: bool,
+) -> Result<(), String> {
+    if models.is_empty() {
+        return Err("至少选择一个模型".to_string());
+    }
+
+    let (provider_id, base_url, api_type) = tuzi_group_settings(group);
+    let primary_model = models[0].clone();
+
+    if config.get("auth").is_none() {
+        config["auth"] = json!({});
+    }
+    if config["auth"].get("profiles").is_none() {
+        config["auth"]["profiles"] = json!({});
+    }
+    config["auth"]["profiles"][format!("{}:default", provider_id)] = json!({
+        "provider": provider_id,
+        "mode": "api_key",
+    });
+
+    if config.get("models").is_none() {
+        config["models"] = json!({});
+    }
+    if config["models"].get("providers").is_none() {
+        config["models"]["providers"] = json!({});
+    }
+
+    let provider_models: Vec<Value> = models
+        .iter()
+        .map(|model_id| {
+            json!({
+                "id": model_id,
+                "name": model_id,
+                "api": api_type,
+                "reasoning": false,
+                "input": ["text"],
+                "cost": {
+                    "input": 0,
+                    "output": 0,
+                    "cacheRead": 0,
+                    "cacheWrite": 0
+                },
+                "contextWindow": 200000,
+                "maxTokens": if provider_id == TUZI_CODEX_PROVIDER_ID { 100000 } else { 8192 }
+            })
+        })
+        .collect();
+
+    config["models"]["providers"][provider_id] = json!({
+        "baseUrl": base_url,
+        "apiKey": api_key,
+        "api": api_type,
+        "models": provider_models
+    });
+
+    if config.get("agents").is_none() {
+        config["agents"] = json!({});
+    }
+    if config["agents"].get("defaults").is_none() {
+        config["agents"]["defaults"] = json!({});
+    }
+    if config["agents"]["defaults"].get("models").is_none() {
+        config["agents"]["defaults"]["models"] = json!({});
+    }
+
+    for model_id in models {
+        config["agents"]["defaults"]["models"][format!("{}/{}", provider_id, model_id)] = json!({});
+    }
+
+    if activate_group {
+        if config["agents"]["defaults"].get("model").is_none() {
+            config["agents"]["defaults"]["model"] = json!({});
+        }
+        config["agents"]["defaults"]["model"] = json!({
+            "primary": format!("{}/{}", provider_id, primary_model),
+            "fallbacks": models
+                .iter()
+                .skip(1)
+                .map(|model_id| format!("{}/{}", provider_id, model_id))
+                .collect::<Vec<String>>(),
+        });
+    }
+
+    Ok(())
+}
+
+fn split_model_id(full_model_id: &str) -> Result<(String, String), String> {
+    let mut parts = full_model_id.splitn(2, '/');
+    let provider_id = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "无效的模型 ID".to_string())?;
+    let model_id = parts
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "无效的模型 ID".to_string())?;
+
+    Ok((provider_id.to_string(), model_id.to_string()))
+}
+
+fn update_tuzi_env_for_primary_model(
+    model_id: &str,
+) -> Result<(), String> {
+    let (provider_id, short_model_id) = split_model_id(model_id)?;
+    let group = match provider_id.as_str() {
+        TUZI_CLAUDE_PROVIDER_ID => TuziGroup::ClaudeCode,
+        TUZI_CODEX_PROVIDER_ID => TuziGroup::Codex,
+        _ => return Ok(()),
+    };
+
+    let env_path = platform::get_env_file_path();
+    let overview_groups = vec![
+        build_tuzi_group_config(TuziGroup::ClaudeCode),
+        build_tuzi_group_config(TuziGroup::Codex),
+    ];
+    let target = overview_groups
+        .iter()
+        .find(|item| item.group == group && item.configured)
+        .cloned()
+        .ok_or_else(|| "目标 Tuzi 分组尚未配置".to_string())?;
+
+    let api_key = {
+        let (api_key_key, _, _) = tuzi_group_keys(&group);
+        file::read_env_value(&env_path, api_key_key).unwrap_or_default()
+    };
+
+    let mut reordered_models = target.models.clone();
+    if let Some(index) = reordered_models.iter().position(|item| item == &short_model_id) {
+        let primary = reordered_models.remove(index);
+        reordered_models.insert(0, primary);
+    } else {
+        reordered_models.insert(0, short_model_id.clone());
+    }
+
+    let mut env_pairs = Vec::new();
+    for group_cfg in &overview_groups {
+        if !group_cfg.configured {
+            continue;
+        }
+        let (group_api_key_key, group_model_key, group_models_key) = tuzi_group_keys(&group_cfg.group);
+        let stored_api_key = file::read_env_value(&env_path, group_api_key_key).unwrap_or_default();
+        if !stored_api_key.is_empty() {
+            env_pairs.push((group_api_key_key.to_string(), stored_api_key.clone()));
+        }
+
+        let group_models = if group_cfg.group == group {
+            reordered_models.clone()
+        } else {
+            group_cfg.models.clone()
+        };
+
+        if let Some(primary_model) = group_models.first() {
+            env_pairs.push((group_model_key.to_string(), primary_model.clone()));
+        }
+        if !group_models.is_empty() {
+            env_pairs.push((group_models_key.to_string(), group_models.join(",")));
+        }
+
+        if group_cfg.group == group {
+            env_pairs.push(("TUZI_API_KEY".to_string(), api_key.clone()));
+            env_pairs.push(("TUZI_GROUP".to_string(), group.as_str().to_string()));
+            env_pairs.push(("TUZI_PROVIDER_ID".to_string(), provider_id.clone()));
+            env_pairs.push(("TUZI_BASE_URL".to_string(), target.base_url.clone()));
+            env_pairs.push(("TUZI_API_TYPE".to_string(), target.api_type.clone()));
+            env_pairs.push(("TUZI_MODEL".to_string(), short_model_id.clone()));
+            env_pairs.push(("TUZI_MODELS".to_string(), reordered_models.join(",")));
+        }
+    }
+
+    rewrite_env_file(&env_pairs)?;
+
+    Ok(())
+}
 
 /// 获取 openclaw.json 配置
 fn load_openclaw_config() -> Result<Value, String> {
@@ -192,6 +492,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "anthropic-messages".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/anthropic".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "claude-opus-4-5-20251101".to_string(),
@@ -219,6 +520,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/openai".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "gpt-4o".to_string(),
@@ -246,6 +548,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/moonshot".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "kimi-k2.5".to_string(),
@@ -273,6 +576,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/qwen".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "qwen-max".to_string(),
@@ -300,6 +604,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: true,
             docs_url: None,
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "deepseek-chat".to_string(),
@@ -327,6 +632,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/glm".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "glm-4".to_string(),
@@ -346,6 +652,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "anthropic-messages".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/minimax".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "minimax-m2.1".to_string(),
@@ -365,6 +672,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/venice".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "llama-3.3-70b".to_string(),
@@ -384,6 +692,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: true,
             docs_url: Some("https://docs.openclaw.ai/providers/openrouter".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "anthropic/claude-opus-4-5".to_string(),
@@ -403,6 +712,7 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
             api_type: "openai-completions".to_string(),
             requires_api_key: false,
             docs_url: Some("https://docs.openclaw.ai/providers/ollama".to_string()),
+            source: Some("official".to_string()),
             suggested_models: vec![
                 SuggestedModel {
                     id: "llama3".to_string(),
@@ -421,6 +731,238 @@ pub async fn get_official_providers() -> Result<Vec<OfficialProvider>, String> {
         providers.len()
     );
     Ok(providers)
+}
+
+#[command]
+pub async fn get_tuzi_templates() -> Result<Vec<TuziModelTemplate>, String> {
+    Ok(vec![
+        TuziModelTemplate {
+            group: TuziGroup::ClaudeCode,
+            provider_id: TUZI_CLAUDE_PROVIDER_ID.to_string(),
+            name: "Tuzi Claude-Code".to_string(),
+            default_base_url: "https://api.tu-zi.com".to_string(),
+            api_type: "anthropic-messages".to_string(),
+            suggested_models: vec![
+                "claude-sonnet-4-6",
+                "claude-sonnet-4-6-thinking",
+                "claude-sonnet-4-5-20250929-thinking",
+                "claude-sonnet-4-5-20250929",
+                "claude-sonnet-4-20250514-thinking",
+                "claude-sonnet-4-20250514",
+                "claude-opus-4-6",
+                "claude-opus-4-5-20251101-thinking",
+                "claude-opus-4-5-20251101",
+                "claude-opus-4-5",
+                "claude-opus-4-20250514-thinking",
+                "claude-opus-4-20250514",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, id)| SuggestedModel {
+                id: id.to_string(),
+                name: id.to_string(),
+                description: None,
+                context_window: Some(200000),
+                max_tokens: Some(8192),
+                recommended: idx == 0,
+            })
+            .collect(),
+        },
+        TuziModelTemplate {
+            group: TuziGroup::Codex,
+            provider_id: TUZI_CODEX_PROVIDER_ID.to_string(),
+            name: "Tuzi Codex".to_string(),
+            default_base_url: "https://api.tu-zi.com/v1".to_string(),
+            api_type: "openai-responses".to_string(),
+            suggested_models: vec![
+                "gpt-5.4",
+                "gpt-5.3-codex",
+                "gpt-5.2-medium",
+                "gpt-5.2-high",
+                "gpt-5.2-codex",
+                "gpt-5.2",
+                "gpt-5.1-high",
+                "gpt-5.1-medium",
+                "gpt-5.1-low",
+                "gpt-5.1-codex-max-high",
+                "gpt-5.1-codex-max",
+                "gpt-5.1",
+                "gpt-5-codex",
+                "gpt-5-high",
+                "gpt-5-low",
+                "gpt-5",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, id)| SuggestedModel {
+                id: id.to_string(),
+                name: id.to_string(),
+                description: None,
+                context_window: Some(200000),
+                max_tokens: Some(100000),
+                recommended: idx == 0,
+            })
+            .collect(),
+        },
+    ])
+}
+
+#[command]
+pub async fn get_tuzi_config() -> Result<TuziConfigOverview, String> {
+    let env_path = platform::get_env_file_path();
+    let active_group = file::read_env_value(&env_path, "TUZI_GROUP").and_then(|value| match value.as_str() {
+        "codex" => Some(TuziGroup::Codex),
+        "claude-code" => Some(TuziGroup::ClaudeCode),
+        _ => None,
+    });
+
+    let groups = vec![
+        build_tuzi_group_config(TuziGroup::ClaudeCode),
+        build_tuzi_group_config(TuziGroup::Codex),
+    ];
+    let configured = groups.iter().any(|group| group.configured);
+
+    Ok(TuziConfigOverview {
+        configured,
+        active_group,
+        active_provider_id: file::read_env_value(&env_path, "TUZI_PROVIDER_ID"),
+        active_model: file::read_env_value(&env_path, "TUZI_MODEL"),
+        active_models: split_csv_models(file::read_env_value(&env_path, "TUZI_MODELS")),
+        groups,
+    })
+}
+
+#[command]
+pub async fn save_tuzi_config(
+    group: TuziGroup,
+    api_key: String,
+    models: Vec<String>,
+) -> Result<String, String> {
+    if api_key.trim().is_empty() {
+        return Err("API Key 不能为空".to_string());
+    }
+    if models.is_empty() {
+        return Err("至少选择一个模型".to_string());
+    }
+
+    ensure_config_file_parent_dirs()?;
+
+    let mut config = load_openclaw_config()?;
+    sync_tuzi_provider_in_config(&mut config, &group, api_key.trim(), &models, true)?;
+    save_openclaw_config(&config)?;
+
+    let current = get_tuzi_config().await?;
+    let claude = current
+        .groups
+        .iter()
+        .find(|item| item.group == TuziGroup::ClaudeCode)
+        .cloned()
+        .unwrap_or_else(|| build_tuzi_group_config(TuziGroup::ClaudeCode));
+    let codex = current
+        .groups
+        .iter()
+        .find(|item| item.group == TuziGroup::Codex)
+        .cloned()
+        .unwrap_or_else(|| build_tuzi_group_config(TuziGroup::Codex));
+
+    let active_models = models.join(",");
+    let (provider_id, base_url, api_type) = tuzi_group_settings(&group);
+    let primary_model = models[0].clone();
+    let mut env_pairs = vec![
+        ("TUZI_API_KEY".to_string(), api_key.trim().to_string()),
+        ("TUZI_GROUP".to_string(), group.as_str().to_string()),
+        ("TUZI_PROVIDER_ID".to_string(), provider_id.to_string()),
+        ("TUZI_BASE_URL".to_string(), base_url.to_string()),
+        ("TUZI_API_TYPE".to_string(), api_type.to_string()),
+        ("TUZI_MODEL".to_string(), primary_model.clone()),
+        ("TUZI_MODELS".to_string(), active_models.clone()),
+    ];
+
+    for group_cfg in [&claude, &codex] {
+        if group_cfg.configured || group_cfg.group == group {
+            let (api_key_key, model_key, models_key) = tuzi_group_keys(&group_cfg.group);
+            let env_api_key = if group_cfg.group == group {
+                api_key.trim().to_string()
+            } else {
+                file::read_env_value(&platform::get_env_file_path(), api_key_key).unwrap_or_default()
+            };
+            if !env_api_key.is_empty() {
+                env_pairs.push((api_key_key.to_string(), env_api_key));
+            }
+            if let Some(model) = if group_cfg.group == group {
+                Some(primary_model.clone())
+            } else {
+                group_cfg.primary_model.clone()
+            } {
+                env_pairs.push((model_key.to_string(), model));
+            }
+            let models_csv = if group_cfg.group == group {
+                active_models.clone()
+            } else {
+                group_cfg.models.join(",")
+            };
+            if !models_csv.is_empty() {
+                env_pairs.push((models_key.to_string(), models_csv));
+            }
+        }
+    }
+
+    rewrite_env_file(&env_pairs)?;
+
+    Ok(format!("Tuzi {} 配置已保存", group.as_str()))
+}
+
+#[command]
+pub async fn activate_tuzi_group(group: TuziGroup) -> Result<String, String> {
+    let overview = get_tuzi_config().await?;
+    let target = overview
+        .groups
+        .iter()
+        .find(|item| item.group == group && item.configured)
+        .cloned()
+        .ok_or_else(|| "目标 Tuzi 分组尚未配置".to_string())?;
+
+    let env_path = platform::get_env_file_path();
+    let (api_key_key, _, _) = tuzi_group_keys(&group);
+    let api_key = file::read_env_value(&env_path, api_key_key)
+        .ok_or_else(|| "目标 Tuzi 分组缺少 API Key".to_string())?;
+    let mut config = load_openclaw_config()?;
+    sync_tuzi_provider_in_config(&mut config, &group, &api_key, &target.models, true)?;
+    save_openclaw_config(&config)?;
+
+    let mut env_pairs = Vec::new();
+    for group_cfg in &overview.groups {
+        if !group_cfg.configured {
+            continue;
+        }
+        let (group_api_key_key, group_model_key, group_models_key) = tuzi_group_keys(&group_cfg.group);
+        let stored_api_key = file::read_env_value(&env_path, group_api_key_key).unwrap_or_default();
+        if !stored_api_key.is_empty() {
+            env_pairs.push((group_api_key_key.to_string(), stored_api_key.clone()));
+        }
+        if let Some(primary_model) = &group_cfg.primary_model {
+            env_pairs.push((group_model_key.to_string(), primary_model.clone()));
+        }
+        if !group_cfg.models.is_empty() {
+            env_pairs.push((group_models_key.to_string(), group_cfg.models.join(",")));
+        }
+        if group_cfg.group == group {
+            env_pairs.push(("TUZI_API_KEY".to_string(), stored_api_key));
+            env_pairs.push(("TUZI_GROUP".to_string(), group.as_str().to_string()));
+            env_pairs.push(("TUZI_PROVIDER_ID".to_string(), target.provider_id.clone()));
+            env_pairs.push(("TUZI_BASE_URL".to_string(), target.base_url.clone()));
+            env_pairs.push(("TUZI_API_TYPE".to_string(), target.api_type.clone()));
+            if let Some(primary_model) = &target.primary_model {
+                env_pairs.push(("TUZI_MODEL".to_string(), primary_model.clone()));
+            }
+            if !target.models.is_empty() {
+                env_pairs.push(("TUZI_MODELS".to_string(), target.models.join(",")));
+            }
+        }
+    }
+
+    rewrite_env_file(&env_pairs)?;
+    Ok(format!("已切换到 Tuzi 分组 {}", group.as_str()))
 }
 
 /// 获取 AI 配置概览
@@ -472,13 +1014,7 @@ pub async fn get_ai_config() -> Result<AIConfigOverview, String> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            let api_key_masked = api_key.as_ref().map(|key| {
-                if key.len() > 8 {
-                    format!("{}...{}", &key[..4], &key[key.len() - 4..])
-                } else {
-                    "****".to_string()
-                }
-            });
+            let api_key_masked = mask_api_key(api_key.clone());
 
             // 解析模型列表
             let models_array = provider_config.get("models").and_then(|v| v.as_array());
@@ -729,6 +1265,7 @@ pub async fn set_primary_model(model_id: String) -> Result<String, String> {
     info!("[设置主模型] 设置主模型: {}", model_id);
 
     let mut config = load_openclaw_config()?;
+    let (provider_id, short_model_id) = split_model_id(&model_id)?;
 
     // 确保路径存在
     if config.get("agents").is_none() {
@@ -743,8 +1280,21 @@ pub async fn set_primary_model(model_id: String) -> Result<String, String> {
 
     // 设置主模型
     config["agents"]["defaults"]["model"]["primary"] = json!(model_id);
+    if let Some(provider_models) = config
+        .pointer(&format!("/models/providers/{}/models", provider_id))
+        .and_then(|value| value.as_array())
+    {
+        let fallbacks = provider_models
+            .iter()
+            .filter_map(|model| model.get("id").and_then(|value| value.as_str()))
+            .filter(|id| *id != short_model_id)
+            .map(|id| format!("{}/{}", provider_id, id))
+            .collect::<Vec<String>>();
+        config["agents"]["defaults"]["model"]["fallbacks"] = json!(fallbacks);
+    }
 
     save_openclaw_config(&config)?;
+    update_tuzi_env_for_primary_model(&format!("{}/{}", provider_id, short_model_id))?;
     info!("[设置主模型] ✓ 主模型已设置为: {}", model_id);
 
     Ok(format!("主模型已设置为 {}", model_id))
@@ -876,6 +1426,14 @@ pub async fn get_channels_config() -> Result<Vec<ChannelConfig>, String> {
         } else {
             HashMap::new()
         };
+
+        if channel_id == "discord" {
+            if !config_map.contains_key("botToken") {
+                if let Some(token) = config_map.get("token").cloned() {
+                    config_map.insert("botToken".to_string(), token);
+                }
+            }
+        }
         
         // 从 env 文件读取测试字段
         for field in test_fields {
@@ -960,7 +1518,12 @@ pub async fn save_channel_config(channel: ChannelConfig) -> Result<String, Strin
             }
         } else {
             // 保存到 openclaw.json
-            channel_obj[key] = value.clone();
+            if channel.id == "discord" && key == "botToken" {
+                channel_obj["botToken"] = value.clone();
+                channel_obj["token"] = value.clone();
+            } else {
+                channel_obj[key] = value.clone();
+            }
         }
     }
     

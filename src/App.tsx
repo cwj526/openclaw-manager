@@ -10,21 +10,10 @@ import { Settings } from './components/Settings';
 import { Testing } from './components/Testing';
 import { Logs } from './components/Logs';
 import { appLogger } from './lib/logger';
-import { isTauri } from './lib/tauri';
+import { EnvironmentStatus, isTauri } from './lib/tauri';
 import { Download, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 
 export type PageType = 'dashboard' | 'ai' | 'channels' | 'testing' | 'logs' | 'settings';
-
-export interface EnvironmentStatus {
-  node_installed: boolean;
-  node_version: string | null;
-  node_version_ok: boolean;
-  openclaw_installed: boolean;
-  openclaw_version: string | null;
-  config_dir_exists: boolean;
-  ready: boolean;
-  os: string;
-}
 
 interface ServiceStatus {
   running: boolean;
@@ -36,6 +25,7 @@ interface UpdateInfo {
   update_available: boolean;
   current_version: string | null;
   latest_version: string | null;
+  source: string;
   error: string | null;
 }
 
@@ -248,6 +238,9 @@ function App() {
                       </p>
                       <p className="text-xs text-white/70">
                         当前版本: {updateInfo.current_version}
+                      </p>
+                      <p className="text-xs text-white/70">
+                        更新来源: {updateInfo.source}
                       </p>
                     </>
                   )}

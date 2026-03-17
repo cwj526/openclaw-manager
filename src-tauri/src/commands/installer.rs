@@ -18,6 +18,12 @@ pub struct EnvironmentStatus {
     pub openclaw_version: Option<String>,
     /// 配置目录是否存在
     pub config_dir_exists: bool,
+    /// 是否已配置任意 AI
+    pub ai_configured: bool,
+    /// 是否已配置 Tuzi
+    pub tuzi_configured: bool,
+    /// 当前激活的 Tuzi 分组
+    pub tuzi_active_group: Option<String>,
     /// 是否全部就绪
     pub ready: bool,
     /// 操作系统
@@ -68,7 +74,29 @@ pub async fn check_environment() -> Result<EnvironmentStatus, String> {
     let config_dir = platform::get_config_dir();
     let config_dir_exists = std::path::Path::new(&config_dir).exists();
     info!("[环境检查] 配置目录: {}, exists={}", config_dir, config_dir_exists);
-    
+
+    let env_path = platform::get_env_file_path();
+    let config_path = platform::get_config_file_path();
+    let tuzi_active_group = crate::utils::file::read_env_value(&env_path, "TUZI_GROUP");
+    let tuzi_model = crate::utils::file::read_env_value(&env_path, "TUZI_MODEL");
+    let tuzi_key = crate::utils::file::read_env_value(&env_path, "TUZI_API_KEY");
+    let tuzi_configured = tuzi_active_group.is_some() && tuzi_model.is_some() && tuzi_key.is_some();
+
+    let ai_configured = if let Ok(content) = std::fs::read_to_string(&config_path) {
+        serde_json::from_str::<serde_json::Value>(&content)
+            .ok()
+            .and_then(|config| {
+                config
+                    .pointer("/models/providers")
+                    .and_then(|v| v.as_object())
+                    .map(|providers| !providers.is_empty())
+            })
+            .unwrap_or(false)
+            || tuzi_configured
+    } else {
+        tuzi_configured
+    };
+
     let ready = node_installed && node_version_ok && openclaw_installed;
     info!("[环境检查] 环境就绪状态: ready={}", ready);
     
@@ -79,6 +107,9 @@ pub async fn check_environment() -> Result<EnvironmentStatus, String> {
         openclaw_installed,
         openclaw_version,
         config_dir_exists,
+        ai_configured,
+        tuzi_configured,
+        tuzi_active_group,
         ready,
         os,
     })
@@ -980,6 +1011,8 @@ pub struct UpdateInfo {
     pub current_version: Option<String>,
     /// 最新版本
     pub latest_version: Option<String>,
+    /// 更新来源
+    pub source: String,
     /// 错误信息
     pub error: Option<String>,
 }
@@ -999,6 +1032,7 @@ pub async fn check_openclaw_update() -> Result<UpdateInfo, String> {
             update_available: false,
             current_version: None,
             latest_version: None,
+            source: "npm 包".to_string(),
             error: Some("OpenClaw 未安装".to_string()),
         });
     }
@@ -1012,6 +1046,7 @@ pub async fn check_openclaw_update() -> Result<UpdateInfo, String> {
             update_available: false,
             current_version,
             latest_version: None,
+            source: "npm 包".to_string(),
             error: Some("无法获取最新版本信息".to_string()),
         });
     }
@@ -1027,6 +1062,7 @@ pub async fn check_openclaw_update() -> Result<UpdateInfo, String> {
         update_available,
         current_version,
         latest_version,
+        source: "npm 包".to_string(),
         error: None,
     })
 }
@@ -1060,9 +1096,16 @@ fn get_latest_openclaw_version() -> Option<String> {
 /// current: 当前版本 (如 "1.0.0" 或 "v1.0.0")
 /// latest: 最新版本 (如 "1.0.1")
 fn compare_versions(current: &str, latest: &str) -> bool {
-    // 移除可能的 'v' 前缀和空白
-    let current = current.trim().trim_start_matches('v');
-    let latest = latest.trim().trim_start_matches('v');
+    let current = normalize_version_string(current);
+    let latest = normalize_version_string(latest);
+
+    if current.is_empty() || latest.is_empty() {
+        return false;
+    }
+
+    if current == latest {
+        return false;
+    }
     
     // 分割版本号
     let current_parts: Vec<u32> = current
@@ -1086,6 +1129,31 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     }
     
     false
+}
+
+fn normalize_version_string(version: &str) -> String {
+    let trimmed = version.trim().trim_start_matches('v');
+    let mut started = false;
+    let mut collected = String::new();
+
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            started = true;
+            collected.push(ch);
+            continue;
+        }
+
+        if started && ch == '.' {
+            collected.push(ch);
+            continue;
+        }
+
+        if started {
+            break;
+        }
+    }
+
+    collected.trim_matches('.').to_string()
 }
 
 /// 更新 OpenClaw

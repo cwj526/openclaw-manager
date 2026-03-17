@@ -48,8 +48,12 @@ fn main() {
             config::get_dashboard_url,
             // AI 配置管理
             config::get_official_providers,
+            config::get_tuzi_templates,
+            config::get_tuzi_config,
             config::get_ai_config,
             config::save_provider,
+            config::save_tuzi_config,
+            config::activate_tuzi_group,
             config::delete_provider,
             config::set_primary_model,
             config::add_available_model,
@@ -60,6 +64,7 @@ fn main() {
             // 诊断测试
             diagnostics::run_doctor,
             diagnostics::test_ai_connection,
+            diagnostics::test_model_connection,
             diagnostics::test_channel,
             diagnostics::get_system_info,
             diagnostics::start_channel_login,

@@ -23,6 +23,9 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { aiLogger } from '../../lib/logger';
+import { api, TuziConfigOverview, TuziGroup, TuziModelTemplate } from '../../lib/tauri';
+
+const TUZI_PROVIDER_NAMES = new Set(['tuzi-claude-code', 'tuzi-codex']);
 
 // ============ 类型定义 ============
 
@@ -631,12 +634,12 @@ function ProviderDialog({ officialProviders, onClose, onSave, editingProvider }:
 interface ProviderCardProps {
   provider: ConfiguredProvider;
   officialProviders: OfficialProvider[];
-  onSetPrimary: (modelId: string) => void;
+  onOpenActions: (target: ModelActionTarget) => void;
   onRefresh: () => void;
   onEdit: (provider: ConfiguredProvider) => void;
 }
 
-function ProviderCard({ provider, officialProviders, onSetPrimary, onRefresh, onEdit }: ProviderCardProps) {
+function ProviderCard({ provider, officialProviders, onOpenActions, onRefresh, onEdit }: ProviderCardProps) {
   const [expanded, setExpanded] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -736,7 +739,7 @@ function ProviderCard({ provider, officialProviders, onSetPrimary, onRefresh, on
                 {provider.models.map(model => (
                   <div
                     key={model.full_id}
-                      className={clsx(
+                    className={clsx(
                       'flex items-center justify-between p-3 rounded-lg border transition-all',
                       model.is_primary
                         ? 'bg-claw-500/10 border-claw-500/50'
@@ -760,14 +763,6 @@ function ProviderCard({ provider, officialProviders, onSetPrimary, onRefresh, on
                         <p className="text-xs text-gray-500">{model.full_id}</p>
                       </div>
                     </div>
-                    {!model.is_primary && (
-                      <button
-                        onClick={() => onSetPrimary(model.full_id)}
-                        className="text-xs text-gray-500 hover:text-claw-400 transition-colors"
-                      >
-                        设为主模型
-                      </button>
-                    )}
                   </div>
                 ))}
               </div>
@@ -813,6 +808,25 @@ function ProviderCard({ provider, officialProviders, onSetPrimary, onRefresh, on
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      onOpenActions({
+                        kind: 'provider',
+                        providerId: provider.name,
+                        displayName: provider.name,
+                        models: provider.models.map(model => ({
+                          id: model.id,
+                          fullId: model.full_id,
+                          isPrimary: model.is_primary,
+                        })),
+                      });
+                    }}
+                    className="flex items-center gap-1 text-sm text-gray-300 hover:text-white transition-colors"
+                  >
+                    <Settings2 size={14} />
+                    模型操作
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
                       onEdit(provider);
                     }}
                     className="flex items-center gap-1 text-sm text-claw-400 hover:text-claw-300 transition-colors"
@@ -838,17 +852,374 @@ function ProviderCard({ provider, officialProviders, onSetPrimary, onRefresh, on
   );
 }
 
+type ModelActionTarget = {
+  kind: 'provider' | 'tuzi-group';
+  providerId: string;
+  displayName: string;
+  models: Array<{ id: string; fullId: string; isPrimary: boolean }>;
+  group?: TuziGroup;
+};
+
+interface ModelActionDialogProps {
+  target: ModelActionTarget;
+  onClose: () => void;
+  onSetPrimary: (modelId: string) => Promise<void>;
+  onTestModel: (providerId: string, modelId: string) => Promise<AITestResult>;
+}
+
+function ModelActionDialog({ target, onClose, onSetPrimary, onTestModel }: ModelActionDialogProps) {
+  const initialPrimary = target.models.find((model) => model.isPrimary)?.fullId || target.models[0]?.fullId || '';
+  const initialTest = target.models[0]?.id || '';
+  const [selectedPrimaryModelId, setSelectedPrimaryModelId] = useState(initialPrimary);
+  const [selectedTestModelId, setSelectedTestModelId] = useState(initialTest);
+  const [settingPrimary, setSettingPrimary] = useState(false);
+  const [dialogTesting, setDialogTesting] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [dialogTestResult, setDialogTestResult] = useState<AITestResult | null>(null);
+
+  const handleSetPrimary = async () => {
+    if (!selectedPrimaryModelId) return;
+    setSettingPrimary(true);
+    setDialogError(null);
+    try {
+      await onSetPrimary(selectedPrimaryModelId);
+      onClose();
+    } catch (e) {
+      setDialogError(String(e));
+    } finally {
+      setSettingPrimary(false);
+    }
+  };
+
+  const handleTestModel = async () => {
+    if (!selectedTestModelId) return;
+    setDialogTesting(true);
+    setDialogError(null);
+    setDialogTestResult(null);
+    try {
+      const result = await onTestModel(target.providerId, selectedTestModelId);
+      setDialogTestResult(result);
+    } catch (e) {
+      setDialogError(String(e));
+    } finally {
+      setDialogTesting(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+    >
+      <div className="w-full max-w-3xl rounded-2xl border border-dark-500 bg-dark-700 p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-white">模型操作</h3>
+            <p className="text-sm text-gray-400">
+              {target.kind === 'tuzi-group' ? `Tuzi 分组: ${target.displayName}` : `Provider: ${target.displayName}`}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-sm text-gray-500 hover:text-white">关闭</button>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="space-y-3">
+            <div>
+              <h4 className="text-sm font-medium text-white">设为主模型</h4>
+              <p className="text-xs text-gray-500 mt-1">选择一个模型作为当前默认推理模型。</p>
+            </div>
+            <div className="space-y-2">
+              {target.models.map((model) => (
+                <label
+                  key={`primary-${model.fullId}`}
+                  className={clsx(
+                    'flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer',
+                    selectedPrimaryModelId === model.fullId ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600'
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="primary-model"
+                    checked={selectedPrimaryModelId === model.fullId}
+                    onChange={() => setSelectedPrimaryModelId(model.fullId)}
+                    className="w-4 h-4"
+                  />
+                  <div className="flex-1">
+                    <p className="text-sm text-white">{model.id}</p>
+                    <p className="text-xs text-gray-500">{model.fullId}</p>
+                  </div>
+                  {model.isPrimary && (
+                    <span className="text-xs text-claw-300">当前主模型</span>
+                  )}
+                </label>
+              ))}
+            </div>
+            <button
+              onClick={handleSetPrimary}
+              disabled={settingPrimary || !selectedPrimaryModelId}
+              className="btn-primary w-full flex items-center justify-center gap-2"
+            >
+              {settingPrimary ? <Loader2 size={16} className="animate-spin" /> : <Star size={16} />}
+              设为主模型
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <h4 className="text-sm font-medium text-white">测试模型连通性</h4>
+              <p className="text-xs text-gray-500 mt-1">选择一个模型，单独验证当前 provider/model 的可用性。</p>
+            </div>
+            <div className="space-y-2">
+              {target.models.map((model) => (
+                <label
+                  key={`test-${model.fullId}`}
+                  className={clsx(
+                    'flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer',
+                    selectedTestModelId === model.id ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600'
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="test-model"
+                    checked={selectedTestModelId === model.id}
+                    onChange={() => setSelectedTestModelId(model.id)}
+                    className="w-4 h-4"
+                  />
+                  <div className="flex-1">
+                    <p className="text-sm text-white">{model.id}</p>
+                    <p className="text-xs text-gray-500">{model.fullId}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <button
+              onClick={handleTestModel}
+              disabled={dialogTesting || !selectedTestModelId}
+              className="btn-secondary w-full flex items-center justify-center gap-2"
+            >
+              {dialogTesting ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+              测试连通性
+            </button>
+          </div>
+        </div>
+
+        {dialogError && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+            {dialogError}
+          </div>
+        )}
+
+        {dialogTestResult && (
+          <div
+            className={clsx(
+              'rounded-xl p-4 border',
+              dialogTestResult.success ? 'bg-green-500/10 border-green-500/30' : 'bg-red-500/10 border-red-500/30'
+            )}
+          >
+            <div className="flex items-center gap-3 mb-2">
+              {dialogTestResult.success ? (
+                <CheckCircle size={20} className="text-green-400" />
+              ) : (
+                <XCircle size={20} className="text-red-400" />
+              )}
+              <div className="flex-1">
+                <p className={clsx('font-medium', dialogTestResult.success ? 'text-green-400' : 'text-red-400')}>
+                  {dialogTestResult.success ? '连接成功' : '连接失败'}
+                </p>
+                <p className="text-xs text-gray-400">
+                  {dialogTestResult.provider}/{dialogTestResult.model}
+                </p>
+                {dialogTestResult.latency_ms && (
+                  <p className="text-xs text-gray-400">响应时间: {dialogTestResult.latency_ms}ms</p>
+                )}
+              </div>
+            </div>
+            {dialogTestResult.response && (
+              <div className="mt-2 p-3 bg-dark-800 rounded-lg">
+                <p className="text-xs text-gray-400 mb-1">AI 响应:</p>
+                <p className="text-sm text-white whitespace-pre-wrap">{dialogTestResult.response}</p>
+              </div>
+            )}
+            {dialogTestResult.error && (
+              <div className="mt-2 p-3 bg-red-500/10 rounded-lg">
+                <p className="text-xs text-red-400 mb-1">错误信息:</p>
+                <p className="text-sm text-red-300 whitespace-pre-wrap">{dialogTestResult.error}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+interface TuziDialogProps {
+  templates: TuziModelTemplate[];
+  tuziConfig: TuziConfigOverview | null;
+  initialGroup: TuziGroup;
+  onClose: () => void;
+  onSave: () => void;
+}
+
+function TuziDialog({ templates, tuziConfig, initialGroup, onClose, onSave }: TuziDialogProps) {
+  const [group, setGroup] = useState<TuziGroup>(initialGroup);
+  const [apiKey, setApiKey] = useState('');
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  const [customModel, setCustomModel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const currentGroup = tuziConfig?.groups.find((item) => item.group === group);
+    if (currentGroup?.models.length) {
+      setSelectedModels(currentGroup.models);
+      return;
+    }
+    const template = templates.find((item) => item.group === group);
+    const recommended = template?.suggested_models.filter((item) => item.recommended).map((item) => item.id) || [];
+    setSelectedModels(recommended.length ? recommended : template?.suggested_models.slice(0, 1).map((item) => item.id) || []);
+  }, [group, templates, tuziConfig]);
+
+  const activeTemplate = templates.find((item) => item.group === group);
+
+  const toggleModel = (modelId: string) => {
+    setSelectedModels((prev) => prev.includes(modelId) ? prev.filter((item) => item !== modelId) : [...prev, modelId]);
+  };
+
+  const addCustomModel = () => {
+    const trimmed = customModel.trim();
+    if (!trimmed || selectedModels.includes(trimmed)) return;
+    setSelectedModels((prev) => [...prev, trimmed]);
+    setCustomModel('');
+  };
+
+  const handleSave = async () => {
+    if (!apiKey.trim()) {
+      setError('请输入 API Key');
+      return;
+    }
+    if (selectedModels.length === 0) {
+      setError('请至少选择一个模型');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.saveTuziConfig(group, apiKey.trim(), selectedModels);
+      onSave();
+      onClose();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+    >
+      <div className="w-full max-w-3xl rounded-2xl border border-dark-500 bg-dark-700 p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Tuzi API 快速接入</h3>
+            <p className="text-sm text-gray-400">配置 Claude-Code 或 Codex 分组，同时保留其他 Provider 能力。</p>
+          </div>
+          <button onClick={onClose} className="text-sm text-gray-500 hover:text-white">关闭</button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {(['claude-code', 'codex'] as TuziGroup[]).map((item) => {
+            const current = tuziConfig?.groups.find((groupItem) => groupItem.group === item);
+            return (
+              <button
+                key={item}
+                onClick={() => setGroup(item)}
+                className={clsx('rounded-xl border p-4 text-left', group === item ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600')}
+              >
+                <p className="text-white font-medium">{item === 'claude-code' ? 'Claude-Code' : 'Codex'}</p>
+                <p className="text-xs text-gray-400 mt-1">{current?.configured ? `已配置: ${current.primary_model}` : '未配置'}</p>
+              </button>
+            );
+          })}
+        </div>
+
+        <div>
+          <label className="block text-sm text-gray-400 mb-2">API Key</label>
+          <input
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="输入该分组对应的 Tuzi API Key"
+            className="input-base"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm text-gray-400 mb-2">模型列表</label>
+          <div className="grid md:grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1">
+            {activeTemplate?.suggested_models.map((model) => (
+              <label
+                key={model.id}
+                className={clsx('flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer', selectedModels.includes(model.id) ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600')}
+              >
+                <input type="checkbox" checked={selectedModels.includes(model.id)} onChange={() => toggleModel(model.id)} className="w-4 h-4" />
+                <span className="text-sm text-white">{model.id}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <input
+            value={customModel}
+            onChange={(e) => setCustomModel(e.target.value)}
+            placeholder="自定义模型名称"
+            className="input-base"
+          />
+          <button onClick={addCustomModel} className="btn-secondary whitespace-nowrap">添加模型</button>
+        </div>
+
+        {selectedModels.length > 0 && (
+          <div className="rounded-xl bg-dark-600 p-3 text-sm text-gray-300">
+            默认模型：<span className="text-white font-medium">{selectedModels[0]}</span>
+          </div>
+        )}
+
+        {error && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
+
+        <div className="flex justify-end gap-3">
+          <button onClick={onClose} className="btn-secondary">取消</button>
+          <button onClick={handleSave} disabled={saving} className="btn-primary flex items-center gap-2">
+            {saving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+            保存 Tuzi 配置
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 // ============ 主组件 ============
 
 export function AIConfig() {
   const [loading, setLoading] = useState(true);
   const [officialProviders, setOfficialProviders] = useState<OfficialProvider[]>([]);
   const [aiConfig, setAiConfig] = useState<AIConfigOverview | null>(null);
+  const [tuziConfig, setTuziConfig] = useState<TuziConfigOverview | null>(null);
+  const [tuziTemplates, setTuziTemplates] = useState<TuziModelTemplate[]>([]);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showTuziDialog, setShowTuziDialog] = useState(false);
+  const [tuziDialogGroup, setTuziDialogGroup] = useState<TuziGroup>('claude-code');
   const [editingProvider, setEditingProvider] = useState<ConfiguredProvider | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<AITestResult | null>(null);
+  const [modelActionTarget, setModelActionTarget] = useState<ModelActionTarget | null>(null);
 
   const handleEditProvider = (provider: ConfiguredProvider) => {
     setEditingProvider(provider);
@@ -887,17 +1258,36 @@ export function AIConfig() {
     }
   };
 
+  const runModelTest = async (providerId: string, modelId: string): Promise<AITestResult> => {
+    try {
+      return await api.testModelConnection(providerId, modelId);
+    } catch (e) {
+      return {
+        success: false,
+        provider: providerId,
+        model: modelId,
+        response: null,
+        error: String(e),
+        latency_ms: null,
+      };
+    }
+  };
+
   const loadData = useCallback(async () => {
     aiLogger.info('AIConfig 组件加载数据...');
     setError(null);
     
     try {
-      const [officials, config] = await Promise.all([
+      const [officials, config, tuzi, templates] = await Promise.all([
         invoke<OfficialProvider[]>('get_official_providers'),
         invoke<AIConfigOverview>('get_ai_config'),
+        api.getTuziConfig(),
+        api.getTuziTemplates(),
       ]);
       setOfficialProviders(officials);
       setAiConfig(config);
+      setTuziConfig(tuzi);
+      setTuziTemplates(templates);
       aiLogger.info(`加载完成: ${officials.length} 个官方 Provider, ${config.configured_providers.length} 个已配置`);
     } catch (e) {
       aiLogger.error('加载 AI 配置失败', e);
@@ -907,18 +1297,20 @@ export function AIConfig() {
     }
   }, []);
 
+  const normalProviders = aiConfig?.configured_providers.filter(provider => !TUZI_PROVIDER_NAMES.has(provider.name)) || [];
+
   useEffect(() => {
     loadData();
   }, [loadData]);
 
   const handleSetPrimary = async (modelId: string) => {
     try {
-      await invoke('set_primary_model', { modelId });
+      await api.setPrimaryModel(modelId);
       aiLogger.info(`主模型已设置为: ${modelId}`);
-      loadData();
+      await loadData();
     } catch (e) {
       aiLogger.error('设置主模型失败', e);
-      alert('设置失败: ' + e);
+      throw e;
     }
   };
 
@@ -1023,6 +1415,9 @@ export function AIConfig() {
                   <p className={clsx('font-medium', testResult.success ? 'text-green-400' : 'text-red-400')}>
                     {testResult.success ? '连接成功' : '连接失败'}
                   </p>
+                  <p className="text-xs text-gray-400">
+                    {testResult.provider}/{testResult.model}
+                  </p>
                   {testResult.latency_ms && (
                     <p className="text-xs text-gray-400">响应时间: {testResult.latency_ms}ms</p>
                   )}
@@ -1055,16 +1450,132 @@ export function AIConfig() {
         {/* 已配置的 Provider 列表 */}
         <div className="space-y-4">
           <h3 className="text-lg font-medium text-white flex items-center gap-2">
+            <Sparkles size={18} className="text-claw-400" />
+            Tuzi API 快速接入
+          </h3>
+
+          <div className="bg-dark-700 rounded-2xl border border-dark-500 p-5 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-white font-medium">Tuzi 双分组配置</p>
+                <p className="text-sm text-gray-400 mt-1">
+                  支持 Claude-Code 与 Codex 双分组并存，当前激活分组：
+                  <span className="text-claw-300 ml-1">{tuziConfig?.active_group || '未配置'}</span>
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setTuziDialogGroup(tuziConfig?.active_group || 'claude-code');
+                  setShowTuziDialog(true);
+                }}
+                className="btn-primary flex items-center gap-2"
+              >
+                <Sparkles size={16} />
+                {tuziConfig?.configured ? '编辑 Tuzi 配置' : '快速接入 Tuzi'}
+              </button>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              {(['claude-code', 'codex'] as TuziGroup[]).map((group) => {
+                const groupConfig = tuziConfig?.groups.find((item) => item.group === group);
+                const isActive = tuziConfig?.active_group === group;
+                return (
+                  <div key={group} className="rounded-xl border border-dark-500 bg-dark-600 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-white font-medium">{group === 'claude-code' ? 'Claude-Code' : 'Codex'}</p>
+                        <p className="text-xs text-gray-400 mt-1">
+                          {groupConfig?.configured ? `主模型: ${groupConfig.primary_model}` : '尚未配置'}
+                        </p>
+                      </div>
+                      {isActive && (
+                        <span className="px-2 py-1 rounded-full bg-claw-500/20 text-claw-300 text-xs">
+                          当前激活
+                        </span>
+                      )}
+                    </div>
+
+                    {groupConfig?.configured && groupConfig.models.length > 0 ? (
+                      <div className="space-y-2">
+                        {groupConfig.models.map((model) => (
+                          <div key={model} className="flex items-center justify-between gap-3 rounded-lg bg-dark-500 px-3 py-2">
+                            <span className="text-xs text-gray-300">
+                              {model}
+                              {groupConfig.primary_model === model && (
+                                <span className="ml-2 text-claw-300">主模型</span>
+                              )}
+                            </span>
+                            <span className="text-[11px] text-gray-500">{groupConfig.provider_id}/{model}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-500">保存后会同步写入 env 与 openclaw.json</p>
+                    )}
+
+                    <div className="flex gap-2">
+                      {groupConfig?.configured && groupConfig.models.length > 0 && (
+                        <button
+                          onClick={() => setModelActionTarget({
+                            kind: 'tuzi-group',
+                            group,
+                            providerId: groupConfig.provider_id,
+                            displayName: group === 'claude-code' ? 'Claude-Code' : 'Codex',
+                            models: groupConfig.models.map((model) => ({
+                              id: model,
+                              fullId: `${groupConfig.provider_id}/${model}`,
+                              isPrimary: groupConfig.primary_model === model,
+                            })),
+                          })}
+                          className="btn-secondary text-sm py-2 px-3"
+                        >
+                          模型操作
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          setTuziDialogGroup(group);
+                          setShowTuziDialog(true);
+                        }}
+                        className="btn-secondary text-sm py-2 px-3"
+                      >
+                        {groupConfig?.configured ? '编辑分组' : '配置分组'}
+                      </button>
+                      {groupConfig?.configured && !isActive && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await api.activateTuziGroup(group);
+                              await loadData();
+                            } catch (e) {
+                              alert('切换 Tuzi 分组失败: ' + e);
+                            }
+                          }}
+                          className="btn-secondary text-sm py-2 px-3 text-claw-300"
+                        >
+                          设为当前激活
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <h3 className="text-lg font-medium text-white flex items-center gap-2">
             <Server size={18} className="text-gray-500" />
             已配置的 Provider
           </h3>
 
-          {aiConfig?.configured_providers.length === 0 ? (
+          {normalProviders.length === 0 ? (
             <div className="bg-dark-700 rounded-xl border border-dark-500 p-8 text-center">
               <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-dark-600 flex items-center justify-center">
                 <Plus size={24} className="text-gray-500" />
               </div>
-              <p className="text-gray-400 mb-4">还没有配置任何 AI Provider</p>
+              <p className="text-gray-400 mb-4">还没有配置其他 AI Provider</p>
               <button
                 onClick={() => setShowAddDialog(true)}
                 className="btn-primary"
@@ -1074,12 +1585,12 @@ export function AIConfig() {
             </div>
           ) : (
             <div className="space-y-3">
-              {aiConfig?.configured_providers.map(provider => (
+              {normalProviders.map(provider => (
                 <ProviderCard
                   key={provider.name}
                   provider={provider}
                   officialProviders={officialProviders}
-                  onSetPrimary={handleSetPrimary}
+                  onOpenActions={setModelActionTarget}
                   onRefresh={loadData}
                   onEdit={handleEditProvider}
                 />
@@ -1139,6 +1650,23 @@ export function AIConfig() {
             onClose={handleCloseDialog}
             onSave={loadData}
             editingProvider={editingProvider}
+          />
+        )}
+        {showTuziDialog && (
+          <TuziDialog
+            templates={tuziTemplates}
+            tuziConfig={tuziConfig}
+            initialGroup={tuziDialogGroup}
+            onClose={() => setShowTuziDialog(false)}
+            onSave={loadData}
+          />
+        )}
+        {modelActionTarget && (
+          <ModelActionDialog
+            target={modelActionTarget}
+            onClose={() => setModelActionTarget(null)}
+            onSetPrimary={handleSetPrimary}
+            onTestModel={runModelTest}
           />
         )}
       </AnimatePresence>

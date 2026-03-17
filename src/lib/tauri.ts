@@ -70,6 +70,7 @@ export interface OfficialProvider {
   suggested_models: SuggestedModel[];
   requires_api_key: boolean;
   docs_url: string | null;
+  source?: string | null;
 }
 
 export interface SuggestedModel {
@@ -105,6 +106,37 @@ export interface AIConfigOverview {
   primary_model: string | null;
   configured_providers: ConfiguredProvider[];
   available_models: string[];
+}
+
+export type TuziGroup = 'claude-code' | 'codex';
+
+export interface TuziGroupConfig {
+  group: TuziGroup;
+  configured: boolean;
+  provider_id: string;
+  base_url: string;
+  api_type: string;
+  api_key_masked: string | null;
+  primary_model: string | null;
+  models: string[];
+}
+
+export interface TuziConfigOverview {
+  configured: boolean;
+  active_group: TuziGroup | null;
+  active_provider_id: string | null;
+  active_model: string | null;
+  active_models: string[];
+  groups: TuziGroupConfig[];
+}
+
+export interface TuziModelTemplate {
+  group: TuziGroup;
+  provider_id: string;
+  name: string;
+  default_base_url: string;
+  api_type: string;
+  suggested_models: SuggestedModel[];
 }
 
 // 模型配置
@@ -145,6 +177,20 @@ export interface AITestResult {
   latency_ms: number | null;
 }
 
+export interface EnvironmentStatus {
+  node_installed: boolean;
+  node_version: string | null;
+  node_version_ok: boolean;
+  openclaw_installed: boolean;
+  openclaw_version: string | null;
+  config_dir_exists: boolean;
+  ai_configured: boolean;
+  tuzi_configured: boolean;
+  tuzi_active_group: TuziGroup | null;
+  ready: boolean;
+  os: string;
+}
+
 // API 封装（带日志）
 export const api = {
   // 服务管理
@@ -171,7 +217,13 @@ export const api = {
 
   // AI 配置（新版）
   getOfficialProviders: () => invokeWithLog<OfficialProvider[]>('get_official_providers'),
+  getTuziTemplates: () => invokeWithLog<TuziModelTemplate[]>('get_tuzi_templates'),
+  getTuziConfig: () => invokeWithLog<TuziConfigOverview>('get_tuzi_config'),
   getAIConfig: () => invokeWithLog<AIConfigOverview>('get_ai_config'),
+  saveTuziConfig: (group: TuziGroup, apiKey: string, models: string[]) =>
+    invokeWithLog<string>('save_tuzi_config', { group, apiKey, models }),
+  activateTuziGroup: (group: TuziGroup) =>
+    invokeWithLog<string>('activate_tuzi_group', { group }),
   saveProvider: (
     providerName: string,
     baseUrl: string,
@@ -203,6 +255,8 @@ export const api = {
   // 诊断测试
   runDoctor: () => invokeWithLog<DiagnosticResult[]>('run_doctor'),
   testAIConnection: () => invokeWithLog<AITestResult>('test_ai_connection'),
+  testModelConnection: (providerId: string, modelId: string) =>
+    invokeWithLog<AITestResult>('test_model_connection', { providerId, modelId }),
   testChannel: (channelType: string) =>
     invokeWithLog<unknown>('test_channel', { channelType }),
 };

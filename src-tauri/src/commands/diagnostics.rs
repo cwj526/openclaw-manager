@@ -1,7 +1,8 @@
 use crate::models::{AITestResult, ChannelTestResult, DiagnosticResult, SystemInfo};
-use crate::utils::{platform, shell};
+use crate::utils::{file, platform, shell};
 use tauri::command;
 use log::{info, warn, error, debug};
+use serde_json::json;
 
 /// 去除 ANSI 转义序列（颜色代码等）
 fn strip_ansi_codes(input: &str) -> String {
@@ -219,6 +220,86 @@ pub async fn test_ai_connection() -> Result<AITestResult, String> {
             success: false,
             provider: "current".to_string(),
             model: "default".to_string(),
+            response: None,
+            error: Some(e),
+            latency_ms: Some(latency),
+        }),
+    }
+}
+
+#[command]
+pub async fn test_model_connection(provider_id: String, model_id: String) -> Result<AITestResult, String> {
+    info!("[AI测试] 开始测试指定模型: {}/{}", provider_id, model_id);
+
+    let config_path = platform::get_config_file_path();
+    let original_content = file::read_file(&config_path).unwrap_or_else(|_| "{}".to_string());
+    let mut config: serde_json::Value =
+        serde_json::from_str(&original_content).unwrap_or_else(|_| json!({}));
+
+    if config.get("agents").is_none() {
+        config["agents"] = json!({});
+    }
+    if config["agents"].get("defaults").is_none() {
+        config["agents"]["defaults"] = json!({});
+    }
+    if config["agents"]["defaults"].get("model").is_none() {
+        config["agents"]["defaults"]["model"] = json!({});
+    }
+
+    let full_model_id = format!("{}/{}", provider_id, model_id);
+    let fallback_models = config
+        .pointer(&format!("/models/providers/{}/models", provider_id))
+        .and_then(|value| value.as_array())
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("id").and_then(|value| value.as_str()))
+                .filter(|id| *id != model_id)
+                .map(|id| format!("{}/{}", provider_id, id))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    config["agents"]["defaults"]["model"] = json!({
+        "primary": full_model_id,
+        "fallbacks": fallback_models,
+    });
+
+    let updated_content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("序列化测试配置失败: {}", e))?;
+    file::write_file(&config_path, &updated_content)
+        .map_err(|e| format!("写入测试配置失败: {}", e))?;
+
+    let start = std::time::Instant::now();
+    let result = shell::run_openclaw(&["agent", "--local", "--to", "+1234567890", "--message", "回复 OK"]);
+    let latency = start.elapsed().as_millis() as u64;
+
+    let _ = file::write_file(&config_path, &original_content);
+
+    match result {
+        Ok(output) => {
+            let filtered = output
+                .lines()
+                .filter(|line| !line.contains("ExperimentalWarning"))
+                .collect::<Vec<&str>>()
+                .join("\n");
+            let success = !filtered.to_lowercase().contains("error")
+                && !filtered.contains("401")
+                && !filtered.contains("403");
+
+            Ok(AITestResult {
+                success,
+                provider: provider_id,
+                model: model_id,
+                response: if success { Some(filtered.clone()) } else { None },
+                error: if success { None } else { Some(filtered) },
+                latency_ms: Some(latency),
+            })
+        }
+        Err(e) => Ok(AITestResult {
+            success: false,
+            provider: provider_id,
+            model: model_id,
             response: None,
             error: Some(e),
             latency_ms: Some(latency),

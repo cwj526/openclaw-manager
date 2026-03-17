@@ -64,6 +64,9 @@ pub struct AgentModelConfig {
     /// 主模型 (格式: provider/model-id)
     #[serde(default)]
     pub primary: Option<String>,
+    /// 回退模型列表
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
 }
 
 /// 模型配置
@@ -189,6 +192,9 @@ pub struct OfficialProvider {
     pub requires_api_key: bool,
     /// 文档链接
     pub docs_url: Option<String>,
+    /// 来源标识（official / tuzi）
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// 推荐模型
@@ -303,4 +309,56 @@ pub struct ChannelConfig {
 pub struct EnvConfig {
     pub key: String,
     pub value: String,
+}
+
+/// Tuzi 分组
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TuziGroup {
+    ClaudeCode,
+    Codex,
+}
+
+impl TuziGroup {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+/// Tuzi 分组配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuziGroupConfig {
+    pub group: TuziGroup,
+    pub configured: bool,
+    pub provider_id: String,
+    pub base_url: String,
+    pub api_type: String,
+    pub api_key_masked: Option<String>,
+    pub primary_model: Option<String>,
+    pub models: Vec<String>,
+}
+
+/// Tuzi 配置概览
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuziConfigOverview {
+    pub configured: bool,
+    pub active_group: Option<TuziGroup>,
+    pub active_provider_id: Option<String>,
+    pub active_model: Option<String>,
+    pub active_models: Vec<String>,
+    pub groups: Vec<TuziGroupConfig>,
+}
+
+/// Tuzi 模型模板
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TuziModelTemplate {
+    pub group: TuziGroup,
+    pub provider_id: String,
+    pub name: String,
+    pub default_base_url: String,
+    pub api_type: String,
+    pub suggested_models: Vec<SuggestedModel>,
 }

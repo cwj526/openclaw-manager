@@ -1,28 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import {
   CheckCircle2,
   Loader2,
   Download,
-  ArrowRight,
-  RefreshCw,
-  ExternalLink,
   Cpu,
-  Package
+  Package,
+  Sparkles,
+  KeyRound,
+  ArrowRight,
+  CheckCircle,
+  Circle,
 } from 'lucide-react';
+import { api, EnvironmentStatus, TuziConfigOverview, TuziGroup, TuziModelTemplate } from '../../lib/tauri';
 import { setupLogger } from '../../lib/logger';
-
-interface EnvironmentStatus {
-  node_installed: boolean;
-  node_version: string | null;
-  node_version_ok: boolean;
-  openclaw_installed: boolean;
-  openclaw_version: string | null;
-  config_dir_exists: boolean;
-  ready: boolean;
-  os: string;
-}
+import clsx from 'clsx';
 
 interface InstallResult {
   success: boolean;
@@ -32,38 +25,54 @@ interface InstallResult {
 
 interface SetupProps {
   onComplete: () => void;
-  /** 是否嵌入模式（嵌入到 Dashboard 中显示） */
   embedded?: boolean;
 }
 
 export function Setup({ onComplete, embedded = false }: SetupProps) {
   const [envStatus, setEnvStatus] = useState<EnvironmentStatus | null>(null);
+  const [tuziConfig, setTuziConfig] = useState<TuziConfigOverview | null>(null);
+  const [tuziTemplates, setTuziTemplates] = useState<TuziModelTemplate[]>([]);
   const [checking, setChecking] = useState(true);
   const [installing, setInstalling] = useState<'nodejs' | 'openclaw' | null>(null);
+  const [savingTuzi, setSavingTuzi] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [step, setStep] = useState<'check' | 'install' | 'complete'>('check');
+  const [mode, setMode] = useState<'tuzi' | 'other'>('tuzi');
+  const [selectedGroup, setSelectedGroup] = useState<TuziGroup>('claude-code');
+  const [apiKey, setApiKey] = useState('');
+  const [customModel, setCustomModel] = useState('');
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
 
-  const checkEnvironment = async () => {
-    setupLogger.info('检查系统环境...');
+  const activeTemplate = useMemo(
+    () => tuziTemplates.find((item) => item.group === selectedGroup) || null,
+    [tuziTemplates, selectedGroup]
+  );
+
+  const refreshState = async () => {
     setChecking(true);
     setError(null);
     try {
-      const status = await invoke<EnvironmentStatus>('check_environment');
-      setupLogger.state('环境状态', status);
-      setEnvStatus(status);
-
-      if (status.ready) {
-        setupLogger.info('✅ 环境就绪');
-        setStep('complete');
-        // 延迟一下再跳转，让用户看到成功状态
-        setTimeout(() => onComplete(), 1500);
+      const [env, tuzi, templates] = await Promise.all([
+        invoke<EnvironmentStatus>('check_environment'),
+        api.getTuziConfig(),
+        api.getTuziTemplates(),
+      ]);
+      setEnvStatus(env);
+      setTuziConfig(tuzi);
+      setTuziTemplates(templates);
+      const preferredGroup = tuzi.active_group || 'claude-code';
+      setSelectedGroup(preferredGroup);
+      const currentGroup = tuzi.groups.find((item) => item.group === preferredGroup);
+      if (currentGroup?.models.length) {
+        setSelectedModels(currentGroup.models);
       } else {
-        setupLogger.warn('环境未就绪，需要安装依赖');
-        setStep('install');
+        const defaultModels =
+          templates.find((item) => item.group === preferredGroup)?.suggested_models
+            .filter((item) => item.recommended)
+            .map((item) => item.id) || [];
+        setSelectedModels(defaultModels.length ? defaultModels : templates.find((item) => item.group === preferredGroup)?.suggested_models.slice(0, 1).map((item) => item.id) || []);
       }
     } catch (e) {
-      setupLogger.error('检查环境失败', e);
-      setError(`检查环境失败: ${e}`);
+      setError(`检查环境失败: ${String(e)}`);
     } finally {
       setChecking(false);
     }
@@ -71,341 +80,333 @@ export function Setup({ onComplete, embedded = false }: SetupProps) {
 
   useEffect(() => {
     setupLogger.info('Setup 组件初始化');
-    checkEnvironment();
+    refreshState();
   }, []);
 
   const handleInstallNodejs = async () => {
-    setupLogger.action('安装 Node.js');
-    setupLogger.info('开始安装 Node.js...');
     setInstalling('nodejs');
     setError(null);
-
     try {
-      // 先尝试直接安装
       const result = await invoke<InstallResult>('install_nodejs');
-
       if (result.success) {
-        setupLogger.info('✅ Node.js 安装成功');
-        // 重新检查环境
-        await checkEnvironment();
-      } else if (result.message.includes('重启')) {
-        // 需要重启应用
-        setError('Node.js 安装完成，请重启应用以使环境变量生效');
+        await refreshState();
       } else {
-        // 打开终端手动安装
         await invoke<string>('open_install_terminal', { installType: 'nodejs' });
-        setError('已打开安装终端，请在终端中完成安装后点击"重新检查"');
+        setError(result.error || '已打开终端，请完成 Node.js 安装后重新检查');
       }
     } catch (e) {
-      // 如果自动安装失败，打开终端
-      try {
-        await invoke<string>('open_install_terminal', { installType: 'nodejs' });
-        setError('已打开安装终端，请在终端中完成安装后点击"重新检查"');
-      } catch (termErr) {
-        setError(`安装失败: ${e}。${termErr}`);
-      }
+      setError(`Node.js 安装失败: ${String(e)}`);
     } finally {
       setInstalling(null);
     }
   };
 
   const handleInstallOpenclaw = async () => {
-    setupLogger.action('安装 OpenClaw');
-    setupLogger.info('开始安装 OpenClaw...');
     setInstalling('openclaw');
     setError(null);
-
     try {
       const result = await invoke<InstallResult>('install_openclaw');
-
-      if (result.success) {
-        setupLogger.info('✅ OpenClaw 安装成功，初始化配置...');
-        // 初始化配置
-        await invoke<InstallResult>('init_openclaw_config');
-        setupLogger.info('✅ 配置初始化完成');
-        // 重新检查环境
-        await checkEnvironment();
-      } else {
-        setupLogger.warn('自动安装失败，打开终端手动安装');
-        // 打开终端手动安装
+      if (!result.success) {
         await invoke<string>('open_install_terminal', { installType: 'openclaw' });
-        setError('已打开安装终端，请在终端中完成安装后点击"重新检查"');
+        setError(result.error || '已打开终端，请完成 OpenClaw 安装后重新检查');
+      } else {
+        await invoke<InstallResult>('init_openclaw_config');
+        await refreshState();
       }
     } catch (e) {
-      setupLogger.error('安装失败，尝试打开终端', e);
-      try {
-        await invoke<string>('open_install_terminal', { installType: 'openclaw' });
-        setError('已打开安装终端，请在终端中完成安装后点击"重新检查"');
-      } catch (termErr) {
-        setError(`安装失败: ${e}。${termErr}`);
-      }
+      setError(`OpenClaw 安装失败: ${String(e)}`);
     } finally {
       setInstalling(null);
     }
   };
 
-  const getOsName = (os: string) => {
-    switch (os) {
-      case 'windows': return 'Windows';
-      case 'macos': return 'macOS';
-      case 'linux': return 'Linux';
-      default: return os;
-    }
-  };
-
-  // 渲染安装内容（复用于嵌入模式和全屏模式）
-  const renderContent = () => {
-    return (
-      <AnimatePresence mode="wait">
-        {/* 检查中状态 */}
-        {checking && (
-          <motion.div
-            key="checking"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="text-center py-6"
-          >
-            <Loader2 className="w-10 h-10 text-brand-500 animate-spin mx-auto mb-3" />
-            <p className="text-dark-300">正在检测系统环境...</p>
-          </motion.div>
-        )}
-
-        {/* 安装步骤 */}
-        {!checking && step === 'install' && envStatus && (
-          <motion.div
-            key="install"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="space-y-4"
-          >
-            {/* 系统信息（仅非嵌入模式） */}
-            {!embedded && (
-              <div className="flex items-center justify-between text-sm text-dark-400 pb-4 border-b border-dark-700">
-                <span>操作系统</span>
-                <span className="text-dark-200">{getOsName(envStatus.os)}</span>
-              </div>
-            )}
-
-            {/* Node.js 状态 */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${envStatus.node_installed && envStatus.node_version_ok
-                    ? 'bg-green-500/20 text-green-400'
-                    : 'bg-red-500/20 text-red-400'
-                  }`}>
-                  <Cpu className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-white font-medium">Node.js</p>
-                  <p className="text-sm text-dark-400">
-                    {envStatus.node_version
-                      ? `${envStatus.node_version} ${envStatus.node_version_ok ? '✓' : '(需要 v22+)'}`
-                      : '未安装'}
-                  </p>
-                </div>
-              </div>
-
-              {envStatus.node_installed && envStatus.node_version_ok ? (
-                <CheckCircle2 className="w-6 h-6 text-green-400" />
-              ) : (
-                <button
-                  onClick={handleInstallNodejs}
-                  disabled={installing !== null}
-                  className="btn-primary text-sm px-4 py-2 flex items-center gap-2"
-                >
-                  {installing === 'nodejs' ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      安装中...
-                    </>
-                  ) : (
-                    <>
-                      <Download className="w-4 h-4" />
-                      安装
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-
-            {/* OpenClaw 状态 */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${envStatus.openclaw_installed
-                    ? 'bg-green-500/20 text-green-400'
-                    : 'bg-red-500/20 text-red-400'
-                  }`}>
-                  <Package className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-white font-medium">OpenClaw</p>
-                  <p className="text-sm text-dark-400">
-                    {envStatus.openclaw_version || '未安装'}
-                  </p>
-                </div>
-              </div>
-
-              {envStatus.openclaw_installed ? (
-                <CheckCircle2 className="w-6 h-6 text-green-400" />
-              ) : (
-                <button
-                  onClick={handleInstallOpenclaw}
-                  disabled={installing !== null || !envStatus.node_version_ok}
-                  className={`btn-primary text-sm px-4 py-2 flex items-center gap-2 ${!envStatus.node_version_ok ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
-                  title={!envStatus.node_version_ok ? '请先安装 Node.js' : ''}
-                >
-                  {installing === 'openclaw' ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      安装中...
-                    </>
-                  ) : (
-                    <>
-                      <Download className="w-4 h-4" />
-                      安装
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-
-            {/* 错误信息 */}
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg"
-              >
-                <p className="text-yellow-400 text-sm">{error}</p>
-              </motion.div>
-            )}
-
-            {/* 操作按钮 */}
-            <div className="flex gap-3 pt-4 border-t border-dark-700/50">
-              <button
-                onClick={checkEnvironment}
-                disabled={checking || installing !== null}
-                className="flex-1 btn-secondary py-2.5 flex items-center justify-center gap-2"
-              >
-                <RefreshCw className={`w-4 h-4 ${checking ? 'animate-spin' : ''}`} />
-                重新检查
-              </button>
-
-              {envStatus.ready && (
-                <button
-                  onClick={onComplete}
-                  className="flex-1 btn-primary py-2.5 flex items-center justify-center gap-2"
-                >
-                  开始使用
-                  <ArrowRight className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
-            {/* 帮助链接 */}
-            <div className="text-center pt-1">
-              <a
-                href="https://nodejs.org/en/download"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-dark-400 hover:text-brand-400 transition-colors inline-flex items-center gap-1"
-              >
-                手动下载 Node.js
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-          </motion.div>
-        )}
-
-        {/* 完成状态 */}
-        {!checking && step === 'complete' && (
-          <motion.div
-            key="complete"
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="text-center py-6"
-          >
-            <motion.div
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ type: 'spring', damping: 10, delay: 0.1 }}
-            >
-              <CheckCircle2 className="w-12 h-12 text-green-400 mx-auto mb-3" />
-            </motion.div>
-            <h3 className="text-lg font-bold text-white mb-1">环境就绪！</h3>
-            <p className="text-dark-400 text-sm">
-              Node.js 和 OpenClaw 已正确安装
-            </p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+  const toggleModel = (modelId: string) => {
+    setSelectedModels((prev) =>
+      prev.includes(modelId) ? prev.filter((item) => item !== modelId) : [...prev, modelId]
     );
   };
 
-  // 嵌入模式：作为卡片显示在 Dashboard 中
-  if (embedded) {
-    return (
-      <div className="bg-gradient-to-br from-yellow-500/10 to-orange-500/10 border border-yellow-500/30 rounded-2xl p-6">
-        <div className="flex items-start gap-4 mb-4">
-          <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-gradient-to-br from-yellow-500 to-orange-500 flex items-center justify-center">
-            <span className="text-2xl">⚠️</span>
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-white mb-1">环境配置</h2>
-            <p className="text-dark-400 text-sm">检测到缺少必要的依赖，请完成以下安装</p>
-          </div>
-        </div>
+  const addCustomModel = () => {
+    const trimmed = customModel.trim();
+    if (!trimmed || selectedModels.includes(trimmed)) return;
+    setSelectedModels((prev) => [...prev, trimmed]);
+    setCustomModel('');
+  };
 
-        {renderContent()}
+  const handleSaveTuzi = async () => {
+    if (!apiKey.trim()) {
+      setError('请输入 Tuzi API Key');
+      return;
+    }
+    if (selectedModels.length === 0) {
+      setError('请至少选择一个模型');
+      return;
+    }
+
+    setSavingTuzi(true);
+    setError(null);
+    try {
+      await invoke<InstallResult>('init_openclaw_config');
+      await api.saveTuziConfig(selectedGroup, apiKey.trim(), selectedModels);
+      await refreshState();
+      await onComplete();
+    } catch (e) {
+      setError(`保存 Tuzi 配置失败: ${String(e)}`);
+    } finally {
+      setSavingTuzi(false);
+    }
+  };
+
+  const envReady = !!envStatus?.ready;
+  const aiConfigured = !!envStatus?.ai_configured;
+
+  if (checking) {
+    return (
+      <div className="text-center py-6">
+        <Loader2 className="w-10 h-10 text-brand-500 animate-spin mx-auto mb-3" />
+        <p className="text-dark-300">正在检测系统环境...</p>
       </div>
     );
   }
 
-  // 全屏模式（保留用于特殊情况）
   return (
-    <div className="min-h-screen bg-dark-900 flex items-center justify-center p-8">
-      {/* 背景装饰 */}
-      <div className="fixed inset-0 bg-gradient-radial pointer-events-none" />
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-brand-500/10 rounded-full blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl" />
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="relative z-10 w-full max-w-lg"
-      >
-        {/* Logo 和标题 */}
-        <div className="text-center mb-8">
-          <motion.div
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
-            transition={{ type: 'spring', damping: 15 }}
-            className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-br from-brand-500 to-purple-600 mb-4 shadow-lg shadow-brand-500/25"
-          >
-            <span className="text-4xl">🦞</span>
-          </motion.div>
-          <h1 className="text-2xl font-bold text-white mb-2">OpenClaw Manager</h1>
-          <p className="text-dark-400">环境检测与安装向导</p>
+    <div className={clsx(embedded ? 'bg-dark-700 rounded-2xl p-6 border border-dark-500' : '')}>
+      <div className="space-y-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-white">快速开始</h3>
+            <p className="text-sm text-gray-400 mt-1">
+              先完成基础环境，再快速接入 Tuzi API；你之后仍然可以在 AI 配置页接入其他模型提供商。
+            </p>
+          </div>
+          {envReady && aiConfigured && (
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-500/10 text-green-400 text-sm">
+              <CheckCircle2 size={16} />
+              已完成
+            </span>
+          )}
         </div>
 
-        {/* 主卡片 */}
-        <motion.div
-          layout
-          className="glass-card rounded-2xl p-6 shadow-xl"
-        >
-          {renderContent()}
-        </motion.div>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-dark-600">
+            {envReady ? <CheckCircle className="text-green-400" size={18} /> : <Circle className="text-gray-500" size={18} />}
+            <div className="flex-1">
+              <p className="text-sm text-white font-medium">第 1 步：准备运行环境</p>
+              <p className="text-xs text-gray-400">安装 Node.js 22+ 与 OpenClaw，并初始化本地配置目录。</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-dark-600">
+            {aiConfigured ? <CheckCircle className="text-green-400" size={18} /> : <Circle className="text-gray-500" size={18} />}
+            <div className="flex-1">
+              <p className="text-sm text-white font-medium">第 2 步：接入 AI 模型</p>
+              <p className="text-xs text-gray-400">默认推荐 Tuzi API 快速接入，也可以稍后去 AI 配置页添加其他 Provider。</p>
+            </div>
+          </div>
+        </div>
 
-        {/* 版本信息 */}
-        <p className="text-center text-dark-500 text-xs mt-6">
-          OpenClaw Manager v0.0.7
-        </p>
-      </motion.div>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={clsx('p-2 rounded-lg', envStatus?.node_installed && envStatus.node_version_ok ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400')}>
+                <Cpu className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-white font-medium">Node.js</p>
+                <p className="text-sm text-dark-400">{envStatus?.node_version ? `${envStatus.node_version}${envStatus.node_version_ok ? ' ✓' : ' (需要 v22+)'}` : '未安装'}</p>
+              </div>
+            </div>
+            {envStatus?.node_installed && envStatus.node_version_ok ? (
+              <CheckCircle2 className="w-6 h-6 text-green-400" />
+            ) : (
+              <button onClick={handleInstallNodejs} disabled={installing !== null} className="btn-primary text-sm px-4 py-2 flex items-center gap-2">
+                {installing === 'nodejs' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                安装
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={clsx('p-2 rounded-lg', envStatus?.openclaw_installed ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400')}>
+                <Package className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-white font-medium">OpenClaw</p>
+                <p className="text-sm text-dark-400">{envStatus?.openclaw_version || '未安装'}</p>
+              </div>
+            </div>
+            {envStatus?.openclaw_installed ? (
+              <CheckCircle2 className="w-6 h-6 text-green-400" />
+            ) : (
+              <button
+                onClick={handleInstallOpenclaw}
+                disabled={installing !== null || !envStatus?.node_version_ok}
+                className="btn-primary text-sm px-4 py-2 flex items-center gap-2"
+              >
+                {installing === 'openclaw' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                安装
+              </button>
+            )}
+          </div>
+        </div>
+
+        <AnimatePresence>
+          {envReady && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="space-y-4 border-t border-dark-500 pt-6"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-claw-500/20 flex items-center justify-center">
+                  <Sparkles size={20} className="text-claw-400" />
+                </div>
+                <div>
+                  <p className="text-white font-medium">AI 接入方式</p>
+                  <p className="text-sm text-gray-400">默认推荐 Tuzi API，桌面端仍保留其他 Provider 配置能力。</p>
+                </div>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-3">
+                <button
+                  onClick={() => setMode('tuzi')}
+                  className={clsx('rounded-xl border p-4 text-left transition-colors', mode === 'tuzi' ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600 hover:bg-dark-500')}
+                >
+                  <p className="text-white font-medium">Tuzi API 快速接入</p>
+                  <p className="text-sm text-gray-400 mt-1">按 Tuzi 的 Claude-Code / Codex 双分组模型配置，适合最快接入。</p>
+                </button>
+                <button
+                  onClick={() => setMode('other')}
+                  className={clsx('rounded-xl border p-4 text-left transition-colors', mode === 'other' ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600 hover:bg-dark-500')}
+                >
+                  <p className="text-white font-medium">稍后配置其他 Provider</p>
+                  <p className="text-sm text-gray-400 mt-1">跳过快速接入，稍后在 AI 配置页添加 OpenAI、Anthropic 或自定义接口。</p>
+                </button>
+              </div>
+
+              {mode === 'tuzi' ? (
+                <div className="bg-dark-700 rounded-2xl p-5 border border-dark-500 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-white font-medium">Tuzi API</p>
+                      <p className="text-sm text-gray-400">
+                        当前激活分组：{tuziConfig?.active_group || '未配置'}
+                      </p>
+                    </div>
+                    <div className="text-right text-xs text-gray-500">
+                      已配置分组：{tuziConfig?.groups.filter((item) => item.configured).length || 0} / 2
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {(['claude-code', 'codex'] as TuziGroup[]).map((group) => {
+                      const config = tuziConfig?.groups.find((item) => item.group === group);
+                      return (
+                        <button
+                          key={group}
+                          onClick={() => {
+                            setSelectedGroup(group);
+                            if (config?.models.length) setSelectedModels(config.models);
+                          }}
+                          className={clsx('rounded-xl border p-4 text-left transition-colors', selectedGroup === group ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600 hover:bg-dark-500')}
+                        >
+                          <p className="text-white font-medium">{group === 'claude-code' ? 'Claude-Code' : 'Codex'}</p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {config?.configured ? `已配置: ${config.primary_model}` : '未配置'}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">API Key</label>
+                    <div className="relative">
+                      <KeyRound size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                      <input
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder="输入对应分组的 Tuzi API Key"
+                        className="input-base pl-10"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      模型列表
+                      <span className="ml-2 text-xs text-gray-500">第一个模型将作为默认模型</span>
+                    </label>
+                    <div className="grid md:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
+                      {activeTemplate?.suggested_models.map((model) => (
+                        <label
+                          key={model.id}
+                          className={clsx(
+                            'flex items-center gap-3 rounded-lg border px-3 py-2 cursor-pointer',
+                            selectedModels.includes(model.id) ? 'border-claw-500 bg-claw-500/10' : 'border-dark-500 bg-dark-600'
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedModels.includes(model.id)}
+                            onChange={() => toggleModel(model.id)}
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm text-white">{model.id}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <input
+                      value={customModel}
+                      onChange={(e) => setCustomModel(e.target.value)}
+                      placeholder="自定义模型名称"
+                      className="input-base"
+                    />
+                    <button onClick={addCustomModel} className="btn-secondary whitespace-nowrap">
+                      添加模型
+                    </button>
+                  </div>
+
+                  {selectedModels.length > 0 && (
+                    <div className="rounded-xl bg-dark-600 p-3 text-sm text-gray-300">
+                      默认模型：<span className="text-white font-medium">{selectedModels[0]}</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-gray-500">
+                      保存后会同步写入 `~/.openclaw/env` 和 `~/.openclaw/openclaw.json`
+                    </p>
+                    <button onClick={handleSaveTuzi} disabled={savingTuzi} className="btn-primary flex items-center gap-2">
+                      {savingTuzi ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
+                      快速接入 Tuzi
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dark-500 bg-dark-700 p-5">
+                  <p className="text-white font-medium mb-2">稍后在 AI 配置页继续</p>
+                  <p className="text-sm text-gray-400 mb-4">
+                    这会跳过当前的 Tuzi 快速接入。基础环境已准备好后，你可以在桌面端继续添加 OpenAI、Anthropic、DeepSeek 或自定义兼容接口。
+                  </p>
+                  <button onClick={onComplete} className="btn-secondary">
+                    暂时跳过
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {error && (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+            {error}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

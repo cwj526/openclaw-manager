@@ -410,6 +410,9 @@ export function Channels() {
           form[key] = String(value ?? '');
         }
       });
+      if (channel.channel_type === 'discord' && !form.botToken && typeof channel.config.token === 'string') {
+        form.botToken = String(channel.config.token);
+      }
       setConfigForm(form);
       
       // 如果选择的是飞书渠道，检查插件状态
@@ -467,6 +470,11 @@ export function Channels() {
   const hasValidConfig = (channel: ChannelConfig) => {
     const info = channelInfo[channel.channel_type];
     if (!info) return channel.enabled;
+
+    if (channel.channel_type === 'discord') {
+      const token = channel.config.botToken ?? channel.config.token;
+      return !!token || channel.enabled;
+    }
     
     // 检查是否有必填字段已填写
     const requiredFields = info.fields.filter((f) => f.required);
