@@ -140,7 +140,11 @@ fn parse_route_file(content: &str) -> RouteFileData {
         }
 
         if line.starts_with('[') && line.ends_with(']') {
-            let section = line.trim_start_matches('[').trim_end_matches(']').trim().to_string();
+            let section = line
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .trim()
+                .to_string();
             if section.is_empty() {
                 active_section = None;
             } else {
@@ -167,9 +171,27 @@ fn parse_route_file(content: &str) -> RouteFileData {
             });
             let parsed_value = value.trim().to_string();
             match key.trim() {
-                "ANTHROPIC_API_KEY" => entry.api_key = if parsed_value.is_empty() { None } else { Some(parsed_value) },
-                "ANTHROPIC_BASE_URL" => entry.base_url = if parsed_value.is_empty() { None } else { Some(parsed_value) },
-                "ANTHROPIC_API_TOKEN" => entry.api_token = if parsed_value.is_empty() { None } else { Some(parsed_value) },
+                "ANTHROPIC_API_KEY" => {
+                    entry.api_key = if parsed_value.is_empty() {
+                        None
+                    } else {
+                        Some(parsed_value)
+                    }
+                }
+                "ANTHROPIC_BASE_URL" => {
+                    entry.base_url = if parsed_value.is_empty() {
+                        None
+                    } else {
+                        Some(parsed_value)
+                    }
+                }
+                "ANTHROPIC_API_TOKEN" => {
+                    entry.api_token = if parsed_value.is_empty() {
+                        None
+                    } else {
+                        Some(parsed_value)
+                    }
+                }
                 _ => {}
             }
         }
@@ -324,7 +346,11 @@ fn run_npm_global(command: &str) -> Result<String, String> {
     shell::run_script_output(command)
 }
 
-fn resolve_install_api_key(route_data: &RouteFileData, route_name: &str, provided: Option<String>) -> Option<String> {
+fn resolve_install_api_key(
+    route_data: &RouteFileData,
+    route_name: &str,
+    provided: Option<String>,
+) -> Option<String> {
     if let Some(value) = provided {
         let trimmed = value.trim().to_string();
         if !trimmed.is_empty() {
@@ -392,7 +418,9 @@ pub async fn get_claudecode_status() -> Result<ClaudeCodeStatus, String> {
 
     let env_api_key = std::env::var("ANTHROPIC_API_KEY").ok().unwrap_or_default();
     let env_base_url = std::env::var("ANTHROPIC_BASE_URL").ok().unwrap_or_default();
-    let env_api_token = std::env::var("ANTHROPIC_API_TOKEN").ok().unwrap_or_default();
+    let env_api_token = std::env::var("ANTHROPIC_API_TOKEN")
+        .ok()
+        .unwrap_or_default();
 
     Ok(ClaudeCodeStatus {
         installed,
@@ -690,7 +718,11 @@ pub async fn install_claudecode(
         ));
     }
 
-    let route_name = if normalized == "B" { "gaccode" } else { "tu-zi" };
+    let route_name = if normalized == "B" {
+        "gaccode"
+    } else {
+        "tu-zi"
+    };
     let base_url = if normalized == "B" {
         "https://gaccode.com/claudecode"
     } else {
@@ -743,7 +775,9 @@ pub async fn install_claudecode(
 }
 
 #[command]
-pub async fn upgrade_claudecode(target_variant: Option<String>) -> Result<ClaudeActionResult, String> {
+pub async fn upgrade_claudecode(
+    target_variant: Option<String>,
+) -> Result<ClaudeActionResult, String> {
     let variant = if let Some(value) = target_variant {
         value.trim().to_lowercase()
     } else {
@@ -786,15 +820,31 @@ pub async fn uninstall_claudecode(clear_config: bool) -> Result<ClaudeActionResu
         Err(e) => return Ok(error_result("ClaudeCode 卸载失败", e, String::new())),
     };
 
+    let mut env_cleanup_logs = Vec::new();
+
     if clear_config {
+        env_cleanup_logs = match clear_env_in_rc() {
+            Ok(paths) => {
+                if paths.is_empty() {
+                    vec!["环境变量清理：当前平台无需处理或未找到 shell rc".to_string()]
+                } else {
+                    paths
+                        .into_iter()
+                        .map(|path| format!("已清理环境变量: {}", path))
+                        .collect::<Vec<_>>()
+                }
+            }
+            Err(e) => vec![format!("清理环境变量失败: {}", e)],
+        };
+
         let route_file_path = get_claude_route_file_path();
         if Path::new(&route_file_path).exists() {
             let _ = std::fs::remove_file(&route_file_path);
         }
-        let _ = clear_env_in_rc();
     }
 
     let mut logs = vec![format!("$ {}", command), output];
+    logs.extend(env_cleanup_logs);
     if clear_config {
         logs.push(format!("已删除路线配置: {}", get_claude_route_file_path()));
     }
@@ -806,6 +856,6 @@ pub async fn uninstall_claudecode(clear_config: bool) -> Result<ClaudeActionResu
             "ClaudeCode 已卸载，配置已保留"
         },
         logs.join("\n"),
-        false,
+        true,
     ))
 }

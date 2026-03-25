@@ -404,13 +404,21 @@ export const api = {
       variant,
       route,
       api_key: apiKey,
+      apiKey,
       model,
       model_reasoning_effort: modelReasoningEffort,
+      modelReasoningEffort,
     }),
   upgradeCodex: (targetVariant?: CodexInstallVariant) =>
-    invokeWithLog<CodexActionResult>('upgrade_codex', { target_variant: targetVariant }),
+    invokeWithLog<CodexActionResult>('upgrade_codex', {
+      target_variant: targetVariant,
+      targetVariant,
+    }),
   uninstallCodex: (clearConfig: boolean) =>
-    invokeWithLog<CodexActionResult>('uninstall_codex', { clear_config: clearConfig }),
+    invokeWithLog<CodexActionResult>('uninstall_codex', {
+      clear_config: clearConfig,
+      clearConfig,
+    }),
   reinstallCodex: (
     variant: CodexInstallVariant,
     route?: string,
@@ -423,9 +431,12 @@ export const api = {
       variant,
       route,
       api_key: apiKey,
+      apiKey,
       model,
       model_reasoning_effort: modelReasoningEffort,
+      modelReasoningEffort,
       clear_config: clearConfig,
+      clearConfig,
     }),
   listCodexRoutes: () => invokeWithLog<CodexRoutesResponse>('list_codex_routes'),
   switchCodexRoute: (
@@ -436,9 +447,12 @@ export const api = {
   ) =>
     invokeWithLog<CodexActionResult>('switch_codex_route', {
       route_name: routeName,
+      routeName,
       api_key: apiKey,
+      apiKey,
       model,
       model_reasoning_effort: modelReasoningEffort,
+      modelReasoningEffort,
     }),
   setCodexRouteModel: (
     routeName: string,
@@ -447,8 +461,10 @@ export const api = {
   ) =>
     invokeWithLog<CodexActionResult>('set_codex_route_model', {
       route_name: routeName,
+      routeName,
       model,
       model_reasoning_effort: modelReasoningEffort,
+      modelReasoningEffort,
     }),
 
   // 配置管理

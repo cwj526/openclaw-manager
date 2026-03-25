@@ -6,7 +6,8 @@ use tauri::command;
 
 const CODEX_OPENAI_PACKAGE: &str = "@openai/codex";
 const CODEX_GAC_INSTALL_URL: &str = "https://gaccode.com/codex/install";
-const CODEX_REFERENCE_SCRIPT_PATH: &str = "/Users/shuidiyu06/tu/sh.tu-zi.com/sh/setup_codex/install_codex.sh";
+const CODEX_REFERENCE_SCRIPT_PATH: &str =
+    "/Users/shuidiyu06/tu/sh.tu-zi.com/sh/setup_codex/install_codex.sh";
 const DEFAULT_MODEL: &str = "gpt-5.4";
 const DEFAULT_REASONING: &str = "medium";
 
@@ -201,7 +202,10 @@ fn parse_install_state(content: &str) -> InstallState {
         }
     }
 
-    InstallState { install_type, route }
+    InstallState {
+        install_type,
+        route,
+    }
 }
 
 fn load_install_state() -> InstallState {
@@ -311,10 +315,7 @@ fn filter_codex_config(existing_content: &str) -> String {
             let section = trimmed.trim_start_matches('[').trim_end_matches(']');
             let should_skip = matches!(
                 section,
-                "model_providers.gac"
-                    | "model_providers.tuzi"
-                    | "profiles.gac"
-                    | "profiles.tuzi"
+                "model_providers.gac" | "model_providers.tuzi" | "profiles.gac" | "profiles.tuzi"
             );
             skipping_codex_sections = should_skip;
             if should_skip {
@@ -336,7 +337,11 @@ fn filter_codex_config(existing_content: &str) -> String {
     lines.join("\n").trim().to_string()
 }
 
-fn write_codex_config(route: &str, model: &str, model_reasoning_effort: &str) -> Result<(), String> {
+fn write_codex_config(
+    route: &str,
+    model: &str,
+    model_reasoning_effort: &str,
+) -> Result<(), String> {
     let base_url = route_base_url(route).ok_or_else(|| format!("未知 route: {}", route))?;
     let config_path = get_codex_config_file_path();
     let existing = file::read_file(&config_path).unwrap_or_default();
@@ -439,6 +444,56 @@ fn run_npm_global(command: &str) -> Result<String, String> {
     shell::run_script_output(command)
 }
 
+fn is_npm_eexist_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("eexist")
+        && (lower.contains("file already exists") || lower.contains("file exists:"))
+}
+
+fn extract_npm_file_exists_path(error: &str) -> Option<String> {
+    for line in error.lines() {
+        let trimmed = line.trim();
+        if let Some(path) = trimmed.strip_prefix("npm error File exists:") {
+            let value = path.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+        if let Some(path) = trimmed.strip_prefix("npm ERR! File exists:") {
+            let value = path.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn run_npm_install_with_recovery(command: &str) -> Result<String, String> {
+    match run_npm_global(command) {
+        Ok(output) => Ok(output),
+        Err(first_error) => {
+            if !is_npm_eexist_error(&first_error) {
+                return Err(first_error);
+            }
+
+            let mut logs = vec![format!("首次安装失败，检测到 EEXIST 冲突\n{}", first_error)];
+            if let Some(path) = extract_npm_file_exists_path(&first_error) {
+                logs.push(format!(
+                    "检测到冲突文件: {}。为避免误删用户现有可执行文件，已停止自动清理，请先确认该文件是否可删除后再重试安装。",
+                    path
+                ));
+            } else {
+                logs.push(
+                    "检测到文件已存在冲突。为避免误删用户现有可执行文件，已停止自动清理，请手动检查 npm 报错中的冲突路径后再重试安装。"
+                        .to_string(),
+                );
+            }
+            Err(logs.join("\n"))
+        }
+    }
+}
+
 fn resolve_model_settings(
     model: Option<String>,
     model_reasoning_effort: Option<String>,
@@ -475,7 +530,8 @@ fn configure_openai_route(
         return Err("切换路线需要提供 API Key".to_string());
     }
 
-    let current_config = parse_codex_config(&file::read_file(&get_codex_config_file_path()).unwrap_or_default());
+    let current_config =
+        parse_codex_config(&file::read_file(&get_codex_config_file_path()).unwrap_or_default());
     let existing_entry = current_config.routes.get(&normalized_route);
     let settings = resolve_model_settings(
         model,
@@ -650,7 +706,7 @@ pub async fn install_codex(
 
     if normalized_variant == "gac" {
         let command = format!("npm install -g {}", CODEX_GAC_INSTALL_URL);
-        match run_npm_global(&command) {
+        match run_npm_install_with_recovery(&command) {
             Ok(output) => {
                 save_install_state("gac", None)?;
                 return Ok(success_result(
@@ -666,7 +722,7 @@ pub async fn install_codex(
     }
 
     let install_command = format!("npm install -g {}", CODEX_OPENAI_PACKAGE);
-    let install_output = match run_npm_global(&install_command) {
+    let install_output = match run_npm_install_with_recovery(&install_command) {
         Ok(value) => value,
         Err(e) => return Ok(error_result("Codex 安装失败", e, String::new())),
     };
@@ -761,7 +817,8 @@ pub async fn set_codex_route_model(
         }
     };
 
-    let config = parse_codex_config(&file::read_file(&get_codex_config_file_path()).unwrap_or_default());
+    let config =
+        parse_codex_config(&file::read_file(&get_codex_config_file_path()).unwrap_or_default());
     let existing = config.routes.get(&normalized_route);
     let settings = resolve_model_settings(
         Some(model),
@@ -815,7 +872,7 @@ pub async fn upgrade_codex(target_variant: Option<String>) -> Result<CodexAction
         format!("npm install -g {}@latest", CODEX_OPENAI_PACKAGE)
     };
 
-    match run_npm_global(&command) {
+    match run_npm_install_with_recovery(&command) {
         Ok(output) => Ok(success_result(
             "Codex 升级成功",
             format!("$ {}\n{}", command, output),
@@ -873,21 +930,27 @@ pub async fn uninstall_codex(clear_config: bool) -> Result<CodexActionResult, St
     logs.push(format!("已删除状态: {}", get_codex_state_file_path()));
 
     if clear_config {
-        let config_path = get_codex_config_file_path();
-        if Path::new(&config_path).exists() {
-            let _ = std::fs::remove_file(&config_path);
-            logs.push(format!("已删除配置: {}", config_path));
-        }
-
         match clear_env_in_rc() {
             Ok(paths) => {
-                for path in paths {
-                    logs.push(format!("已清理环境变量: {}", path));
+                if paths.is_empty() {
+                    logs.push("环境变量清理：当前平台无需处理或未找到 shell rc".to_string());
+                } else {
+                    for path in paths {
+                        logs.push(format!("已清理环境变量: {}", path));
+                    }
                 }
             }
             Err(e) => {
                 logs.push(format!("清理环境变量失败: {}", e));
             }
+        }
+    }
+
+    if clear_config {
+        let config_path = get_codex_config_file_path();
+        if Path::new(&config_path).exists() {
+            let _ = std::fs::remove_file(&config_path);
+            logs.push(format!("已删除配置: {}", config_path));
         }
     }
 
@@ -898,7 +961,7 @@ pub async fn uninstall_codex(clear_config: bool) -> Result<CodexActionResult, St
             "Codex 已卸载，配置已保留"
         },
         logs.join("\n\n"),
-        clear_config,
+        true,
     ))
 }
 
@@ -918,14 +981,7 @@ pub async fn reinstall_codex(
         return Ok(uninstall);
     }
 
-    let install = install_codex(
-        variant,
-        route,
-        api_key,
-        model,
-        model_reasoning_effort,
-    )
-    .await?;
+    let install = install_codex(variant, route, api_key, model, model_reasoning_effort).await?;
 
     let combined_output = [uninstall.stdout, install.stdout]
         .into_iter()
@@ -952,13 +1008,15 @@ pub async fn reinstall_codex(
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_codex_config, normalize_route, parse_codex_config, parse_install_state};
+    use super::{
+        extract_npm_file_exists_path, filter_codex_config, is_npm_eexist_error, normalize_route,
+        parse_codex_config, parse_install_state,
+    };
 
     #[test]
     fn parse_install_state_works() {
-        let state = parse_install_state(
-            "INSTALL_TYPE=openai\nROUTE=gac\nMANAGED_BY=sh.tu-zi.com\n",
-        );
+        let state =
+            parse_install_state("INSTALL_TYPE=openai\nROUTE=gac\nMANAGED_BY=sh.tu-zi.com\n");
         assert_eq!(state.install_type.as_deref(), Some("openai"));
         assert_eq!(state.route.as_deref(), Some("gac"));
 
@@ -972,6 +1030,23 @@ mod tests {
         assert_eq!(normalize_route("gac").as_deref(), Some("gac"));
         assert_eq!(normalize_route("tuzi").as_deref(), Some("tuzi"));
         assert!(normalize_route("abc").is_none());
+    }
+
+    #[test]
+    fn parse_npm_eexist_error_works() {
+        let sample = "npm error code EEXIST\nnpm error File exists: /Users/test/.local/bin/codex\n";
+        assert!(is_npm_eexist_error(sample));
+        assert_eq!(
+            extract_npm_file_exists_path(sample).as_deref(),
+            Some("/Users/test/.local/bin/codex")
+        );
+    }
+
+    #[test]
+    fn parse_npm_eexist_error_missing_path() {
+        let sample = "npm error code EEXIST\nnpm error EEXIST: file already exists\n";
+        assert!(is_npm_eexist_error(sample));
+        assert!(extract_npm_file_exists_path(sample).is_none());
     }
 
     #[test]
@@ -1014,10 +1089,7 @@ model_reasoning_effort = "high"
         let parsed = parse_codex_config(raw);
         assert_eq!(parsed.profile.as_deref(), Some("tuzi"));
         let route = parsed.routes.get("tuzi").expect("tuzi route missing");
-        assert_eq!(
-            route.base_url.as_deref(),
-            Some("https://api.tu-zi.com/v1")
-        );
+        assert_eq!(route.base_url.as_deref(), Some("https://api.tu-zi.com/v1"));
         assert_eq!(route.model.as_deref(), Some("gpt-5.5"));
         assert_eq!(route.model_reasoning_effort.as_deref(), Some("high"));
     }
