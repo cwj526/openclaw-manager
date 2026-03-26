@@ -122,7 +122,28 @@ sudo tccutil reset Accessibility
 sudo tccutil reset SystemPolicyAllFiles
 ```
 
-## 🚀 快速开始
+## 📥 下载安装
+
+普通用户无需配置开发环境，直接下载对应平台的安装包即可使用：
+
+👉 [前往 Releases 页面下载](https://github.com/tuziapi/openclaw-manager/releases/)
+
+| 平台 | 安装包 | 说明 |
+|------|--------|------|
+| macOS (Apple Silicon) | `OpenClaw-Manager_x.x.x_aarch64.dmg` | M1/M2/M3/M4 芯片，双击 .dmg 拖入 Applications |
+| macOS (Intel) | `OpenClaw-Manager_x.x.x_x64.dmg` | Intel 芯片 Mac |
+| Windows | `OpenClaw-Manager_x.x.x_x64-setup.exe` | 双击运行安装向导 |
+| Windows (MSI) | `OpenClaw-Manager_x.x.x_x64_zh-CN.msi` | 适合企业部署或静默安装 |
+| Linux (Debian/Ubuntu) | `openclaw-manager_x.x.x_amd64.deb` | `sudo dpkg -i xxx.deb` |
+| Linux (通用) | `openclaw-manager_x.x.x_amd64.AppImage` | 添加执行权限后直接运行 |
+
+> **macOS 用户注意**：首次打开可能提示"已损坏，无法打开"，这是 Gatekeeper 安全机制导致的，参见下方 [macOS 常见问题](#-macos-常见问题) 解决。
+
+---
+
+## 🚀 从源码构建（开发者）
+
+如果你需要参与开发或自行编译，请按以下步骤操作。
 
 ### 环境要求
 
@@ -156,7 +177,7 @@ sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libxdo-devel
 
 ```bash
 # 克隆项目
-git clone https://github.com/cwj526/openclaw-manager.git
+git clone https://github.com/tuziapi/openclaw-manager.git
 cd openclaw-manager
 
 # 安装依赖
@@ -218,13 +239,7 @@ openclaw-manager/
 
 ## 📦 构建产物
 
-运行 `npm run tauri:build` 后，会在 `src-tauri/target/release/bundle/` 生成：
-
-| 平台 | 格式 |
-|------|------|
-| macOS | `.dmg`, `.app` |
-| Windows | `.msi`, `.exe` |
-| Linux | `.deb`, `.AppImage` |
+运行 `npm run tauri:build` 后，产物位于 `src-tauri/target/release/bundle/`。CI 推送 `v*` 标签后会自动构建并创建 GitHub Draft Release。
 
 ## 🎨 设计理念
 
@@ -282,8 +297,9 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 ## 🔗 相关链接
 
-- [OpenClaw Manager](https://github.com/cwj526/openclaw-manager) - 图形界面版本（本项目）
+- [OpenClaw Manager](https://github.com/tuziapi/openclaw-manager) - 图形界面版本（本项目）
 - [OpenClawInstaller](https://github.com/cwj526/OpenClawInstaller) - 命令行版本
+- [Releases 下载](https://github.com/tuziapi/openclaw-manager/releases/) - 安装包下载
 - [Tauri 官方文档](https://tauri.app/)
 - [React 官方文档](https://react.dev/)
 
