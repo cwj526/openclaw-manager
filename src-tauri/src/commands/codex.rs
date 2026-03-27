@@ -328,7 +328,10 @@ fn parse_codex_config(content: &str) -> ParsedCodexConfig {
     parsed
 }
 
-fn filter_codex_config_strips(existing_content: &str, strip_route_names: &BTreeSet<String>) -> String {
+fn filter_codex_config_strips(
+    existing_content: &str,
+    strip_route_names: &BTreeSet<String>,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut skipping_managed_section = false;
 
@@ -384,17 +387,18 @@ fn effective_base_url(route: &str, entry: &ConfigRouteEntry) -> Result<String, S
             return Ok(t.to_string());
         }
     }
-    route_base_url(route)
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
-            format!(
-                "路线「{}」缺少 base_url，请填写兼容 OpenAI Responses 的 API 根地址",
-                route
-            )
-        })
+    route_base_url(route).map(|s| s.to_string()).ok_or_else(|| {
+        format!(
+            "路线「{}」缺少 base_url，请填写兼容 OpenAI Responses 的 API 根地址",
+            route
+        )
+    })
 }
 
-fn write_codex_config_merged(merged: &ParsedCodexConfig, profile_route: &str) -> Result<(), String> {
+fn write_codex_config_merged(
+    merged: &ParsedCodexConfig,
+    profile_route: &str,
+) -> Result<(), String> {
     let normalized_profile = normalize_route_input(profile_route).ok_or_else(|| {
         format!(
             "非法当前路线: {}（支持 gac / tuzi / 自定义线路名）",
@@ -626,7 +630,11 @@ fn configure_openai_route(
 
     merged.routes.entry(normalized_route.clone()).or_default();
 
-    let existing_entry = merged.routes.get(&normalized_route).cloned().unwrap_or_default();
+    let existing_entry = merged
+        .routes
+        .get(&normalized_route)
+        .cloned()
+        .unwrap_or_default();
     let settings = resolve_model_settings(
         model,
         model_reasoning_effort,
@@ -660,7 +668,9 @@ fn configure_openai_route(
         .map(|s| s.trim().is_empty())
         .unwrap_or(true)
     {
-        return Err("自定义线路需要有效的 BASE_URL（安装或切换时请填写，或先在配置文件中写入）".to_string());
+        return Err(
+            "自定义线路需要有效的 BASE_URL（安装或切换时请填写，或先在配置文件中写入）".to_string(),
+        );
     }
     ent.model = Some(settings.model.clone());
     ent.model_reasoning_effort = Some(settings.model_reasoning_effort.clone());
@@ -856,7 +866,8 @@ pub async fn add_codex_route(
     if base.is_empty() {
         return Ok(error_result(
             "添加线路失败",
-            "Base URL 不能为空（需为兼容 OpenAI Responses 的 API 根地址，通常以 /v1 结尾）".to_string(),
+            "Base URL 不能为空（需为兼容 OpenAI Responses 的 API 根地址，通常以 /v1 结尾）"
+                .to_string(),
             String::new(),
         ));
     }
@@ -1077,7 +1088,10 @@ pub async fn set_codex_route_model(
     if !merged.routes.contains_key(&normalized_route) {
         return Ok(error_result(
             "模型参数更新失败",
-            format!("路线「{}」不存在，请先添加或切换写入过该线路", normalized_route),
+            format!(
+                "路线「{}」不存在，请先添加或切换写入过该线路",
+                normalized_route
+            ),
             String::new(),
         ));
     }
@@ -1310,7 +1324,10 @@ mod tests {
     fn normalize_route_input_works() {
         assert_eq!(normalize_route_input("gac").as_deref(), Some("gac"));
         assert_eq!(normalize_route_input("tuzi").as_deref(), Some("tuzi"));
-        assert_eq!(normalize_route_input("my-proxy").as_deref(), Some("my-proxy"));
+        assert_eq!(
+            normalize_route_input("my-proxy").as_deref(),
+            Some("my-proxy")
+        );
         assert!(normalize_route_input("bad.name").is_none());
         assert!(normalize_route_input("").is_none());
     }
@@ -1394,6 +1411,9 @@ model_reasoning_effort = "low"
         let parsed = parse_codex_config(raw);
         assert_eq!(parsed.profile.as_deref(), Some("corp"));
         let route = parsed.routes.get("corp").expect("corp route");
-        assert_eq!(route.base_url.as_deref(), Some("https://api.example.com/v1"));
+        assert_eq!(
+            route.base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
     }
 }

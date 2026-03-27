@@ -557,6 +557,33 @@ node --version
 #[command]
 pub async fn install_openclaw() -> Result<InstallResult, String> {
     info!("[安装OpenClaw] 开始安装 OpenClaw...");
+
+    // 检查并自动安装 Node.js 依赖
+    let node_version = get_node_version();
+    if node_version.is_none() || !check_node_version_requirement(&node_version) {
+        info!("[安装OpenClaw] 未检测到符合要求的 Node.js，正在尝试自动安装...");
+        let node_result = install_nodejs().await;
+        match node_result {
+            Ok(r) if !r.success => {
+                return Ok(InstallResult {
+                    success: false,
+                    message: "前置依赖 Node.js 安装失败".to_string(),
+                    error: Some(r.message),
+                });
+            }
+            Err(e) => {
+                return Ok(InstallResult {
+                    success: false,
+                    message: "前置依赖 Node.js 安装发生错误".to_string(),
+                    error: Some(e),
+                });
+            }
+            _ => {
+                info!("[安装OpenClaw] Node.js 自动安装完成");
+            }
+        }
+    }
+
     let os = platform::get_os();
     info!("[安装OpenClaw] 检测到操作系统: {}", os);
 
@@ -830,6 +857,12 @@ read -p "按回车键关闭此窗口..."
 
 /// 打开终端安装 OpenClaw
 async fn open_openclaw_install_terminal() -> Result<String, String> {
+    // 检查 Node.js 依赖
+    let node_version = get_node_version();
+    if node_version.is_none() || !check_node_version_requirement(&node_version) {
+        return Err("缺少前置依赖：请先安装 Node.js (v22+) 再安装 OpenClaw。".to_string());
+    }
+
     if platform::is_windows() {
         let script = r#"
 Start-Process powershell -ArgumentList '-NoExit', '-Command', '
@@ -949,6 +982,17 @@ read -p "按回车键关闭..."
 #[command]
 pub async fn uninstall_openclaw() -> Result<InstallResult, String> {
     info!("[卸载OpenClaw] 开始卸载 OpenClaw...");
+
+    // 检查 Node.js 依赖（因为卸载也需要 npm）
+    let node_version = get_node_version();
+    if node_version.is_none() {
+        return Ok(InstallResult {
+            success: false,
+            message: "未检测到 Node.js，无法执行卸载".to_string(),
+            error: Some("卸载 OpenClaw 需要 npm，请先确保 Node.js 环境正常。如果 Node.js 已被卸载，OpenClaw 也将无法运行。".to_string()),
+        });
+    }
+
     let os = platform::get_os();
     info!("[卸载OpenClaw] 检测到操作系统: {}", os);
 
@@ -1061,7 +1105,7 @@ pub struct UpdateInfo {
 /// 检查 OpenClaw 更新
 #[command]
 pub async fn check_openclaw_update() -> Result<UpdateInfo, String> {
-    info!("[版本检查] 开始检查 OpenClaw 更新...");
+    info!("[版本更新] 检查 OpenClaw CLI 版本更新...");
 
     // 获取当前版本
     let current_version = get_openclaw_version();
@@ -1195,6 +1239,17 @@ fn normalize_version_string(version: &str) -> String {
 #[command]
 pub async fn update_openclaw() -> Result<InstallResult, String> {
     info!("[更新OpenClaw] 开始更新 OpenClaw...");
+
+    // 检查 Node.js 依赖
+    let node_version = get_node_version();
+    if node_version.is_none() || !check_node_version_requirement(&node_version) {
+        return Ok(InstallResult {
+            success: false,
+            message: "缺少前置依赖：未检测到符合要求的 Node.js".to_string(),
+            error: Some("更新需要 Node.js 环境，请先安装 Node.js (v22+)".to_string()),
+        });
+    }
+
     let os = platform::get_os();
 
     // 先停止服务
@@ -1274,5 +1329,101 @@ openclaw --version
             message: "OpenClaw 更新失败".to_string(),
             error: Some(e),
         }),
+    }
+}
+
+/// 自动升级 AI Manager 自身
+#[command]
+pub async fn update_ai_manager() -> Result<InstallResult, String> {
+    info!("[AI Manager 更新] 开始执行自动升级...");
+
+    if platform::is_windows() {
+        // Windows 下目前通过浏览器打开最新 Release 页面
+        if let Err(e) = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "start",
+                "https://github.com/tuziapi/openclaw-manager/releases/latest",
+            ])
+            .spawn()
+        {
+            error!("[AI Manager 更新] 打开浏览器失败: {}", e);
+            return Err(format!("打开浏览器失败: {}", e));
+        }
+        Ok(InstallResult {
+            success: true,
+            message: "已在浏览器中打开下载页面".to_string(),
+            error: None,
+        })
+    } else if platform::is_macos() {
+        // macOS: 下载并执行安装脚本
+        let script_content = r#"#!/bin/bash
+clear
+echo "========================================"
+echo "    AI Manager 自动升级向导"
+echo "========================================"
+echo ""
+echo "正在下载最新版本..."
+curl -fsSL https://raw.githubusercontent.com/tuziapi/openclaw-manager/main/scripts/install_ai_manager.sh | bash
+echo ""
+echo "升级完成！请重启 AI Manager"
+read -p "按回车键关闭此窗口..."
+"#;
+
+        let script_path = "/tmp/update_ai_manager.command";
+        std::fs::write(script_path, script_content)
+            .map_err(|e| format!("创建升级脚本失败: {}", e))?;
+
+        std::process::Command::new("chmod")
+            .args(["+x", script_path])
+            .output()
+            .map_err(|e| format!("设置权限失败: {}", e))?;
+
+        std::process::Command::new("open")
+            .arg(script_path)
+            .spawn()
+            .map_err(|e| format!("启动终端失败: {}", e))?;
+
+        Ok(InstallResult {
+            success: true,
+            message: "已打开升级终端".to_string(),
+            error: None,
+        })
+    } else {
+        // Linux: 执行安装脚本
+        let script = "curl -fsSL https://raw.githubusercontent.com/tuziapi/openclaw-manager/main/scripts/install_ai_manager.sh | bash";
+
+        // 尝试在新的终端模拟器中打开
+        let terminals = [
+            "gnome-terminal",
+            "konsole",
+            "xfce4-terminal",
+            "xterm",
+            "alacritty",
+        ];
+        let mut launched = false;
+
+        for term in terminals {
+            if let Ok(_child) = std::process::Command::new(term)
+                .args(["-e", &format!("bash -c '{}'", script)])
+                .spawn()
+            {
+                launched = true;
+                break;
+            }
+        }
+
+        if !launched {
+            // 后台执行
+            std::thread::spawn(move || {
+                let _ = shell::run_bash_output(script);
+            });
+        }
+
+        Ok(InstallResult {
+            success: true,
+            message: "已开始升级".to_string(),
+            error: None,
+        })
     }
 }

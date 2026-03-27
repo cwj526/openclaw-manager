@@ -81,6 +81,7 @@ fn main() {
             // 版本更新
             installer::check_openclaw_update,
             installer::update_openclaw,
+            installer::update_ai_manager,
             // Skills 管理
             skills::get_tuzi_skills_manifest,
             skills::get_tuzi_skills_status,

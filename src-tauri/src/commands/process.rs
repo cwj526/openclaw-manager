@@ -139,9 +139,11 @@ fn get_claude_current_route() -> Option<String> {
     }
 
     let content = std::fs::read_to_string(&route_path).ok()?;
-    content
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("current_route=").map(|v| v.trim().to_string()))
+    content.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("current_route=")
+            .map(|v| v.trim().to_string())
+    })
 }
 
 /// 检查端口是否被占用（通过尝试连接 openclaw gateway）

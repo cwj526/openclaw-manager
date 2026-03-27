@@ -189,14 +189,17 @@ pub async fn test_ai_connection() -> Result<AITestResult, String> {
 
     // 使用 openclaw 命令测试连接
     info!("[AI测试] 执行: openclaw agent --local --to +1234567890 --message 回复 OK");
-    let result = shell::run_openclaw_with_timeout(&[
-        "agent",
-        "--local",
-        "--to",
-        "+1234567890",
-        "--message",
-        "回复 OK",
-    ], std::time::Duration::from_secs(AI_TEST_TIMEOUT_SECS));
+    let result = shell::run_openclaw_with_timeout(
+        &[
+            "agent",
+            "--local",
+            "--to",
+            "+1234567890",
+            "--message",
+            "回复 OK",
+        ],
+        std::time::Duration::from_secs(AI_TEST_TIMEOUT_SECS),
+    );
 
     let latency = start.elapsed().as_millis() as u64;
     info!("[AI测试] 命令执行完成, 耗时: {}ms", latency);
@@ -292,14 +295,17 @@ pub async fn test_model_connection(
         .map_err(|e| format!("写入测试配置失败: {}", e))?;
 
     let start = std::time::Instant::now();
-    let result = shell::run_openclaw_with_timeout(&[
-        "agent",
-        "--local",
-        "--to",
-        "+1234567890",
-        "--message",
-        "回复 OK",
-    ], std::time::Duration::from_secs(AI_TEST_TIMEOUT_SECS));
+    let result = shell::run_openclaw_with_timeout(
+        &[
+            "agent",
+            "--local",
+            "--to",
+            "+1234567890",
+            "--message",
+            "回复 OK",
+        ],
+        std::time::Duration::from_secs(AI_TEST_TIMEOUT_SECS),
+    );
     let latency = start.elapsed().as_millis() as u64;
 
     let _ = file::write_file(&config_path, &original_content);

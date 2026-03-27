@@ -1,3 +1,7 @@
+import React, { useState, useEffect } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
+import { open } from '@tauri-apps/plugin-shell';
+import { isTauri } from '../../lib/tauri';
 import { motion } from 'framer-motion';
 import {
   Boxes,
@@ -96,6 +100,48 @@ export function Sidebar({
   const codexPageActive = view === 'codex_page';
   const overviewActive = view === 'module_center';
 
+  const [updateAvailable, setUpdateAvailable] = useState<{ version: string; url: string } | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  useEffect(() => {
+    const checkUpdate = async () => {
+      try {
+        const response = await fetch('https://api.github.com/repos/tuziapi/openclaw-manager/releases/latest');
+        if (!response.ok) return;
+        const data = await response.json();
+        const latestVersion = data.tag_name.replace(/^v/, '');
+        const currentVersion = await getVersion();
+        
+        // 简单的版本号比较
+        const isNewer = latestVersion.localeCompare(currentVersion, undefined, { numeric: true, sensitivity: 'base' }) > 0;
+        if (isNewer) {
+          setUpdateAvailable({ version: latestVersion, url: data.html_url });
+        }
+      } catch (error) {
+        console.error('Failed to check for updates:', error);
+      }
+    };
+    if (isTauri()) {
+      checkUpdate();
+    }
+  }, []);
+
+  const handleUpdate = async () => {
+    if (!updateAvailable) return;
+    setIsUpdating(true);
+    try {
+      // 通过 Tauri 调用后端执行更新脚本
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('update_ai_manager');
+    } catch (error) {
+      console.error('Update failed via backend, fallback to browser:', error);
+      // 后备方案：如果后端没有此命令或执行失败，打开浏览器
+      await open(updateAvailable.url);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   return (
     <aside className="w-72 bg-dark-800 border-r border-dark-600 flex flex-col">
       <div className="h-14 flex items-center px-6 titlebar-drag border-b border-dark-600">
@@ -104,7 +150,19 @@ export function Sidebar({
             <span className="text-lg">🧩</span>
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-white">AI Manager</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-semibold text-white">AI Manager</h1>
+              {updateAvailable && (
+                <button
+                  onClick={handleUpdate}
+                  disabled={isUpdating}
+                  title={`发现新版本 v${updateAvailable.version}`}
+                  className="text-[10px] bg-claw-500 hover:bg-claw-600 text-white px-1.5 py-0.5 rounded cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isUpdating ? 'Updating...' : 'Update'}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

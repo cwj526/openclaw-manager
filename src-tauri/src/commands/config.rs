@@ -260,8 +260,10 @@ fn build_tuzi_group_config(group: TuziGroup) -> TuziGroupConfig {
         let api_key = file::read_env_value(&env_path, "GACCODE_API_KEY");
         let claude_primary = file::read_env_value(&env_path, "GAC_CLAUDE_MODEL");
         let codex_primary = file::read_env_value(&env_path, "GAC_CODEX_MODEL");
-        let mut claude_models = split_csv_models(file::read_env_value(&env_path, "GAC_CLAUDE_MODELS"));
-        let mut codex_models = split_csv_models(file::read_env_value(&env_path, "GAC_CODEX_MODELS"));
+        let mut claude_models =
+            split_csv_models(file::read_env_value(&env_path, "GAC_CLAUDE_MODELS"));
+        let mut codex_models =
+            split_csv_models(file::read_env_value(&env_path, "GAC_CODEX_MODELS"));
 
         if claude_models.is_empty() {
             if let Some(model) = &claude_primary {
@@ -596,10 +598,19 @@ fn build_tuzi_env_pairs(
             }
             let gac_codex_primary = gac_codex_group_models[0].clone();
 
-            env_pairs.push(("GAC_CLAUDE_MODEL".to_string(), std::mem::take(&mut gac_claude_primary)));
-            env_pairs.push(("GAC_CLAUDE_MODELS".to_string(), gac_claude_group_models.join(",")));
+            env_pairs.push((
+                "GAC_CLAUDE_MODEL".to_string(),
+                std::mem::take(&mut gac_claude_primary),
+            ));
+            env_pairs.push((
+                "GAC_CLAUDE_MODELS".to_string(),
+                gac_claude_group_models.join(","),
+            ));
             env_pairs.push(("GAC_CODEX_MODEL".to_string(), gac_codex_primary));
-            env_pairs.push(("GAC_CODEX_MODELS".to_string(), gac_codex_group_models.join(",")));
+            env_pairs.push((
+                "GAC_CODEX_MODELS".to_string(),
+                gac_codex_group_models.join(","),
+            ));
             continue;
         }
 
@@ -670,7 +681,10 @@ fn update_tuzi_env_for_primary_model(model_id: &str) -> Result<(), String> {
             .cloned()
             .collect::<Vec<_>>();
 
-        if let Some(index) = same_provider_models.iter().position(|item| item == &target_full_id) {
+        if let Some(index) = same_provider_models
+            .iter()
+            .position(|item| item == &target_full_id)
+        {
             let primary = same_provider_models.remove(index);
             same_provider_models.insert(0, primary);
         } else {
@@ -681,7 +695,10 @@ fn update_tuzi_env_for_primary_model(model_id: &str) -> Result<(), String> {
             .into_iter()
             .chain(other_provider_models)
             .collect();
-    } else if let Some(index) = reordered_models.iter().position(|item| item == &short_model_id) {
+    } else if let Some(index) = reordered_models
+        .iter()
+        .position(|item| item == &short_model_id)
+    {
         let primary = reordered_models.remove(index);
         reordered_models.insert(0, primary);
     } else {
@@ -1473,7 +1490,13 @@ pub async fn save_tuzi_config(
         }
         Some(primary) => primary.starts_with(&format!("{}/", target_provider_id)),
     };
-    sync_tuzi_provider_in_config(&mut config, &group, api_key.trim(), &normalized_models, should_update_default)?;
+    sync_tuzi_provider_in_config(
+        &mut config,
+        &group,
+        api_key.trim(),
+        &normalized_models,
+        should_update_default,
+    )?;
     rebuild_model_registry_and_fallbacks(&mut config)?;
     save_openclaw_config(&config)?;
 
@@ -2453,7 +2476,10 @@ mod tests {
         let env_pairs = build_tuzi_env_pairs(&[group], &overrides);
         let env_map = env_pairs.into_iter().collect::<HashMap<_, _>>();
 
-        assert_eq!(env_map.get("GACCODE_API_KEY"), Some(&"test-key".to_string()));
+        assert_eq!(
+            env_map.get("GACCODE_API_KEY"),
+            Some(&"test-key".to_string())
+        );
         assert_eq!(
             env_map.get("GAC_CLAUDE_MODEL"),
             Some(&"claude-opus-4-6".to_string())
@@ -2463,21 +2489,18 @@ mod tests {
             Some(&"claude-opus-4-6,claude-sonnet-4-6,claude-haiku-4-5-20251001".to_string())
         );
         assert_eq!(env_map.get("GAC_CODEX_MODEL"), Some(&"gpt-5.4".to_string()));
-        assert_eq!(env_map.get("GAC_CODEX_MODELS"), Some(&"gpt-5.4".to_string()));
+        assert_eq!(
+            env_map.get("GAC_CODEX_MODELS"),
+            Some(&"gpt-5.4".to_string())
+        );
     }
 
     #[test]
     fn sync_tuzi_provider_in_config_creates_gaccode_providers_and_defaults() {
         let mut config = json!({});
 
-        sync_tuzi_provider_in_config(
-            &mut config,
-            &TuziGroup::Gaccode,
-            "test-key",
-            &[],
-            true,
-        )
-        .expect("sync gaccode");
+        sync_tuzi_provider_in_config(&mut config, &TuziGroup::Gaccode, "test-key", &[], true)
+            .expect("sync gaccode");
 
         assert_eq!(
             config["auth"]["profiles"]["gac-claude:default"]["provider"],
@@ -2487,11 +2510,13 @@ mod tests {
             config["auth"]["profiles"]["gac-codex:default"]["provider"],
             json!("gac-codex")
         );
-        assert!(config["models"]["providers"]["gac-claude"]["models"]
-            .as_array()
-            .expect("gac claude models")
-            .len()
-            >= 3);
+        assert!(
+            config["models"]["providers"]["gac-claude"]["models"]
+                .as_array()
+                .expect("gac claude models")
+                .len()
+                >= 3
+        );
         assert_eq!(
             config["models"]["providers"]["gac-codex"]["models"][0]["id"],
             json!("gpt-5.4")

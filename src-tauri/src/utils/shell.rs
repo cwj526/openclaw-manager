@@ -504,7 +504,10 @@ pub fn run_openclaw(args: &[&str]) -> Result<String, String> {
 }
 
 pub fn run_openclaw_with_timeout(args: &[&str], timeout: StdDuration) -> Result<String, String> {
-    debug!("[Shell] 执行带超时的 openclaw 命令: {:?}, timeout={:?}", args, timeout);
+    debug!(
+        "[Shell] 执行带超时的 openclaw 命令: {:?}, timeout={:?}",
+        args, timeout
+    );
 
     let mut command = build_openclaw_command(args)?;
     let temp_dir = std::env::temp_dir();
@@ -567,7 +570,11 @@ pub fn run_openclaw_with_timeout(args: &[&str], timeout: StdDuration) -> Result<
                         .trim()
                         .to_string();
                     return Err(if !details.is_empty() {
-                        format!("openclaw 命令执行超时（>{} 秒）\n{}", timeout.as_secs(), details)
+                        format!(
+                            "openclaw 命令执行超时（>{} 秒）\n{}",
+                            timeout.as_secs(),
+                            details
+                        )
                     } else {
                         format!("openclaw 命令执行超时（>{} 秒）", timeout.as_secs())
                     });

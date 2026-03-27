@@ -716,7 +716,10 @@ pub async fn install_claudecode(
         match clear_env_in_rc() {
             Ok(paths) => {
                 for path in paths {
-                    logs.push(format!("已从 shell 配置移除 ANTHROPIC_*（避免仍走 tu-zi/gac 线路）: {}", path));
+                    logs.push(format!(
+                        "已从 shell 配置移除 ANTHROPIC_*（避免仍走 tu-zi/gac 线路）: {}",
+                        path
+                    ));
                 }
             }
             Err(e) => logs.push(format!("清理 shell 环境变量失败: {}", e)),
@@ -824,18 +827,19 @@ pub async fn upgrade_claudecode(
         Ok(output) => {
             if variant == "modified" || variant == "a" || variant == "改版" {
                 let mut data = read_route_file();
-                data.routes
-                    .entry("改版".to_string())
-                    .or_insert(RouteEntry {
-                        api_key: None,
-                        base_url: None,
-                        api_token: None,
-                    });
+                data.routes.entry("改版".to_string()).or_insert(RouteEntry {
+                    api_key: None,
+                    base_url: None,
+                    api_token: None,
+                });
                 data.current_route = Some("改版".to_string());
                 let mut logs = vec![format!("$ {}", command), output];
                 match write_route_file(&data) {
                     Ok(()) => {
-                        logs.push(format!("已同步当前路线为「改版」: {}", get_claude_route_file_path()));
+                        logs.push(format!(
+                            "已同步当前路线为「改版」: {}",
+                            get_claude_route_file_path()
+                        ));
                     }
                     Err(e) => logs.push(format!("警告：路线文件写入失败（请手动检查）: {}", e)),
                 }
@@ -847,11 +851,7 @@ pub async fn upgrade_claudecode(
                     }
                     Err(e) => logs.push(format!("清理 shell 环境变量失败: {}", e)),
                 }
-                return Ok(success_result(
-                    message,
-                    logs.join("\n"),
-                    true,
-                ));
+                return Ok(success_result(message, logs.join("\n"), true));
             }
             Ok(success_result(
                 message,
