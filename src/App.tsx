@@ -105,51 +105,60 @@ function App() {
   };
 
   const handleToggleOpenclaw = () => {
+    appLogger.action('页面切换', { to: 'openclaw/dashboard' });
     setActiveTopModule('openclaw');
-    setOpenclawExpanded((prev) => !prev);
+    setOpenclawExpanded(true);
+    setClaudecodeExpanded(false);
+    setCodexExpanded(false);
+    setActiveOpenclawSubPage('dashboard');
+    setView('openclaw_page');
   };
 
   const handleOpenclawSubPage = (subPage: OpenclawSubPageType) => {
     appLogger.action('页面切换', { to: `openclaw/${subPage}` });
     setActiveTopModule('openclaw');
     setOpenclawExpanded(true);
+    setClaudecodeExpanded(false);
+    setCodexExpanded(false);
     setActiveOpenclawSubPage(subPage);
     setView('openclaw_page');
   };
 
   const handleToggleClaudecode = () => {
+    appLogger.action('页面切换', { to: 'claudecode/overview' });
     setActiveTopModule('claudecode');
-    setClaudecodeExpanded((prev) => {
-      const next = !prev;
-      if (next) {
-        setView('claudecode_page');
-      }
-      return next;
-    });
+    setOpenclawExpanded(false);
+    setClaudecodeExpanded(true);
+    setCodexExpanded(false);
+    setActiveClaudeCodeSubPage('overview');
+    setView('claudecode_page');
   };
 
   const handleOpenClaudecodeSubPage = (subPage: ClaudeCodeSubPageType) => {
     appLogger.action('页面切换', { to: `claudecode/${subPage}` });
     setActiveTopModule('claudecode');
+    setOpenclawExpanded(false);
     setClaudecodeExpanded(true);
+    setCodexExpanded(false);
     setActiveClaudeCodeSubPage(subPage);
     setView('claudecode_page');
   };
 
   const handleToggleCodex = () => {
+    appLogger.action('页面切换', { to: 'codex/overview' });
     setActiveTopModule('codex');
-    setCodexExpanded((prev) => {
-      const next = !prev;
-      if (next) {
-        setView('codex_page');
-      }
-      return next;
-    });
+    setOpenclawExpanded(false);
+    setClaudecodeExpanded(false);
+    setCodexExpanded(true);
+    setActiveCodexSubPage('overview');
+    setView('codex_page');
   };
 
   const handleOpenCodexSubPage = (subPage: CodexSubPageType) => {
     appLogger.action('页面切换', { to: `codex/${subPage}` });
     setActiveTopModule('codex');
+    setOpenclawExpanded(false);
+    setClaudecodeExpanded(false);
     setCodexExpanded(true);
     setActiveCodexSubPage(subPage);
     setView('codex_page');
